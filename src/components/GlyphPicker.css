@@ -1,0 +1,100 @@
+.glyph-picker-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.glyph-picker-trigger {
+  user-select: none;
+}
+
+.glyph-picker-trigger:hover {
+  background: #4a4a4a !important;
+}
+
+.glyph-picker-dropdown {
+  position: fixed;
+  z-index: 10000;
+  background: #2a2a2a;
+  border: 1px solid #4a4a4a;
+  border-radius: 4px;
+  padding: 10px;
+  margin-top: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  min-width: 300px;
+  max-width: 400px;
+  max-height: 400px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.glyph-picker-label {
+  color: #ffffff;
+  font-size: 12px;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.glyph-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
+  gap: 4px;
+  overflow-y: auto;
+  padding: 4px;
+  background: #1a1a1a;
+  border-radius: 2px;
+  max-height: 300px;
+}
+
+.glyph-picker-grid::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.glyph-picker-grid::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+
+.glyph-picker-grid::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 3px;
+}
+
+.glyph-picker-grid::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+.glyph-picker-item {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #3a3a3a;
+  border: 1px solid #4a4a4a;
+  border-radius: 3px;
+  color: #ffffff;
+  font-size: 14px;
+  font-family: monospace;
+  cursor: pointer;
+  transition: all 0.2s;
+  padding: 0;
+  margin: 0;
+}
+
+.glyph-picker-item:hover {
+  background: #4a4a4a;
+  border-color: #5a5a5a;
+  transform: scale(1.1);
+}
+
+.glyph-picker-item.selected {
+  background: #4a9eff;
+  border-color: #5ab0ff;
+  box-shadow: 0 0 4px rgba(74, 158, 255, 0.5);
+}
+
+.glyph-picker-item:active {
+  transform: scale(0.95);
+}
+

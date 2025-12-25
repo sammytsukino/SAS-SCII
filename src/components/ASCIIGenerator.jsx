@@ -64,7 +64,7 @@ const ASCIIGenerator = () => {
     glyphAnimation: true,
     animationSpeed: 3.0,
     minGlyphScale: 0,
-    maxGlyphScale: 1.5,
+    maxGlyphScale: 1,
     waveTiles: false,
     invertGrayscale: true,
     transparentBG: false,
@@ -1105,7 +1105,7 @@ const ASCIIGenerator = () => {
     glyphAnimFolder.add(currentSettings, 'glyphAnimation').onChange(updateSettings)
     glyphAnimFolder.add(currentSettings, 'animationSpeed', 0, 1).onChange(updateSettings)
     glyphAnimFolder.add(currentSettings, 'minGlyphScale', 0, 2).onChange(updateSettings)
-    glyphAnimFolder.add(currentSettings, 'maxGlyphScale', 0, 2).onChange(updateSettings)
+    glyphAnimFolder.add(currentSettings, 'maxGlyphScale', 0, 1).onChange(updateSettings)
     glyphAnimFolder.add(currentSettings, 'waveTiles').onChange(updateSettings)
     glyphAnimFolder.add(currentSettings, 'invertGrayscale').onChange(updateSettings)
     glyphAnimFolder.add(currentSettings, 'transparentBG').onChange(updateSettings)

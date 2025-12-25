@@ -120,6 +120,7 @@ const ASCIIGenerator = () => {
   })
 
   const [settings, setSettings] = useState(settingsRef.current)
+  const isPausedRef = useRef(false)
 
   const updateSettings = useCallback(() => {
     const currentSettings = settingsRef.current
@@ -1050,6 +1051,42 @@ const ASCIIGenerator = () => {
     inputFolder.add(uploadVideoBtn, 'upload').name('Upload Video')
 
     
+    const controlsFolder = gui.addFolder('Controls')
+    const pauseResumeBtn = { toggle: () => {
+      isPausedRef.current = !isPausedRef.current
+      pauseResumeController.name(isPausedRef.current ? '▶ Resume' : '⏸ Pause')
+      pauseResumeController.updateDisplay()
+      
+      if (videoRef.current) {
+        if (isPausedRef.current) {
+          videoRef.current.pause()
+        } else {
+          videoRef.current.play()
+        }
+      }
+    }}
+    const pauseResumeController = controlsFolder.add(pauseResumeBtn, 'toggle').name('⏸ Pause')
+    
+    const downloadBtn = { download: () => {
+      const canvas = outputCanvasRef.current
+      if (!canvas) return
+      
+      canvas.toBlob((blob) => {
+        if (!blob) return
+        
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `ascii-art-${Date.now()}.png`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+      }, 'image/png')
+    }}
+    controlsFolder.add(downloadBtn, 'download').name('💾 Download')
+
+    
     const outputFolder = gui.addFolder('3. Output - ASCII')
     outputFolder.add(currentSettings, 'tilesPerRow', 10, 200).onChange(updateSettings)
     outputFolder.add(currentSettings, 'gridLines', 0, 1).onChange(updateSettings)
@@ -1319,6 +1356,11 @@ const ASCIIGenerator = () => {
     let lastFrameTime = 0
     
     const animate = (currentTime) => {
+      if (isPausedRef.current) {
+        animationFrameRef.current = requestAnimationFrame(animate)
+        return
+      }
+      
       animationFrameRef.current = requestAnimationFrame(animate)
       
       const currentSettings = settingsRef.current
@@ -1401,7 +1443,8 @@ const ASCIIGenerator = () => {
           ref={canvas3DRef}
           className="input-canvas"
           style={{ 
-            display: showInput && is3DModel ? 'block' : 'none'
+            display: showInput && is3DModel ? 'block' : 'none',
+            opacity: showInput ? 1 : 0
           }}
         />
         {/* Image/Video input display canvas */}
@@ -1409,12 +1452,16 @@ const ASCIIGenerator = () => {
           ref={inputDisplayCanvasRef}
           className="input-display-canvas"
           style={{ 
-            display: showInput && !is3DModel ? 'block' : 'none'
+            display: showInput && !is3DModel ? 'block' : 'none',
+            opacity: showInput ? 1 : 0
           }}
         />
         <canvas
           ref={outputCanvasRef}
           className="output-canvas"
+          style={{
+            opacity: showInput ? 0.5 : 1
+          }}
         />
       </div>
     </div>

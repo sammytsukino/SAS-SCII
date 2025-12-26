@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { createRoot } from 'react-dom/client'
 import GUI from 'lil-gui'
 import * as THREE from 'three'
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import GlyphPicker from './GlyphPicker'
 import PresetPicker from './PresetPicker'
 import './ASCIIGenerator.css'
@@ -31,6 +32,7 @@ const ASCIIGenerator = () => {
   const videoRef = useRef(null)
   const imageRef = useRef(null)
   const animationFrameRef = useRef(null)
+  const hasCustomObjRef = useRef(false)
   
   
   const settingsRef = useRef({
@@ -46,7 +48,10 @@ const ASCIIGenerator = () => {
     sourceObject: 'torus',
     motionMode: 'Motion',
     zoom: 1.0,
-    motionSpeed: 1.0, 
+    motionSpeed: 1.0,
+    rotationSpeedX: 0.0,
+    rotationSpeedY: 0.01,
+    rotationSpeedZ: 0.0, 
     
     
     tilesPerRow: 40,
@@ -132,7 +137,8 @@ const ASCIIGenerator = () => {
     lastInputHashRef.current = ''
     
     
-    if (meshRef.current && currentSettings.sourceObject) {
+    // Only replace geometry if we don't have a custom OBJ loaded
+    if (meshRef.current && currentSettings.sourceObject && !hasCustomObjRef.current) {
       const geometry = modelPresets[currentSettings.sourceObject]()
       if (meshRef.current.geometry) {
         meshRef.current.geometry.dispose()
@@ -920,6 +926,10 @@ const ASCIIGenerator = () => {
       flatShading: true
     })
     const mesh = new THREE.Mesh(geometry, material)
+    // Initialize rotation to 0 (original position)
+    mesh.rotation.x = 0
+    mesh.rotation.y = 0
+    mesh.rotation.z = 0
     scene.add(mesh)
     
     
@@ -979,6 +989,8 @@ const ASCIIGenerator = () => {
     })
     inputFolder.add(currentSettings, 'inputMode', ['3D Model', 'Image', 'Video']).onChange(updateSettings)
     inputFolder.add(currentSettings, 'sourceObject', Object.keys(modelPresets)).onChange(() => {
+      // Reset custom OBJ flag when selecting a preset
+      hasCustomObjRef.current = false
       
       if (meshRef.current) {
         const geometry = modelPresets[currentSettings.sourceObject]()
@@ -986,6 +998,10 @@ const ASCIIGenerator = () => {
           meshRef.current.geometry.dispose()
         }
         meshRef.current.geometry = geometry
+        // Reset rotation to original position
+        meshRef.current.rotation.x = 0
+        meshRef.current.rotation.y = 0
+        meshRef.current.rotation.z = 0
       }
       updateSettings()
     })
@@ -993,13 +1009,194 @@ const ASCIIGenerator = () => {
     inputFolder.add(currentSettings, 'zoom', 0.1, 5).onChange(updateSettings)
     inputFolder.add(currentSettings, 'motionSpeed', 0, 5).name('Animation Speed').onChange(updateSettings)
     
+    // Rotation controls
+    const rotationFolder = inputFolder.addFolder('Rotation Control')
+    const rotationSpeedXController = rotationFolder.add(currentSettings, 'rotationSpeedX', -0.05, 0.05).name('Rotation Speed X').onChange(updateSettings)
+    const rotationSpeedYController = rotationFolder.add(currentSettings, 'rotationSpeedY', -0.05, 0.05).name('Rotation Speed Y').onChange(updateSettings)
+    const rotationSpeedZController = rotationFolder.add(currentSettings, 'rotationSpeedZ', -0.05, 0.05).name('Rotation Speed Z').onChange(updateSettings)
+    
+    // Reset rotation button
+    const resetRotationBtn = { reset: () => {
+      if (meshRef.current) {
+        meshRef.current.rotation.x = 0
+        meshRef.current.rotation.y = 0
+        meshRef.current.rotation.z = 0
+      }
+    }}
+    rotationFolder.add(resetRotationBtn, 'reset').name('Reset Rotation')
+    
     const uploadObjBtn = { upload: () => {
       const input = document.createElement('input')
       input.type = 'file'
       input.accept = '.obj'
-      input.onchange = (e) => {
-        
-        console.log('OBJ upload not implemented in this example')
+      input.onchange = async (e) => {
+        const file = e.target.files[0]
+        if (file && meshRef.current) {
+          const loader = new OBJLoader()
+          const reader = new FileReader()
+          reader.onload = async (event) => {
+            try {
+              const objContent = event.target.result
+              const object = loader.parse(objContent)
+              
+              // Collect all geometries from the loaded object
+              const geometries = []
+              object.traverse((child) => {
+                if (child instanceof THREE.Mesh && child.geometry) {
+                  // Clone each geometry to avoid issues
+                  const cloned = child.geometry.clone()
+                  // Apply any transformations from the child if needed
+                  // Most OBJ files don't have complex transformations, so we'll skip matrix application
+                  // to avoid issues with different Three.js versions
+                  geometries.push(cloned)
+                }
+              })
+              
+              if (geometries.length > 0) {
+                // Combine all geometries into one
+                let mergedGeometry
+                try {
+                  if (geometries.length === 1) {
+                    mergedGeometry = geometries[0]
+                  } else {
+                    // Try to use BufferGeometryUtils if available
+                    let useUtils = false
+                    try {
+                      const utils = await import('three/examples/jsm/utils/BufferGeometryUtils.js')
+                      if (utils.BufferGeometryUtils && utils.BufferGeometryUtils.mergeGeometries) {
+                        mergedGeometry = utils.BufferGeometryUtils.mergeGeometries(geometries)
+                        useUtils = true
+                      }
+                    } catch (e) {
+                      // BufferGeometryUtils not available, use manual merge
+                    }
+                    
+                    if (!useUtils) {
+                      // Fallback: manual merge
+                      mergedGeometry = new THREE.BufferGeometry()
+                      const positions = []
+                      const normals = []
+                      
+                      for (const geom of geometries) {
+                        // Ensure normals are computed
+                        if (!geom.attributes.normal || geom.attributes.normal.count === 0) {
+                          geom.computeVertexNormals()
+                        }
+                        
+                        const pos = geom.attributes.position
+                        const norm = geom.attributes.normal
+                        const index = geom.index
+                        
+                        if (index) {
+                          // Indexed geometry - expand indices
+                          for (let i = 0; i < index.count; i++) {
+                            const idx = index.getX(i)
+                            positions.push(pos.getX(idx), pos.getY(idx), pos.getZ(idx))
+                            if (norm) {
+                              normals.push(norm.getX(idx), norm.getY(idx), norm.getZ(idx))
+                            }
+                          }
+                        } else {
+                          // Non-indexed geometry
+                          for (let i = 0; i < pos.count; i++) {
+                            positions.push(pos.getX(i), pos.getY(i), pos.getZ(i))
+                            if (norm) {
+                              normals.push(norm.getX(i), norm.getY(i), norm.getZ(i))
+                            }
+                          }
+                        }
+                      }
+                      
+                      mergedGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+                      if (normals.length > 0 && normals.length === positions.length) {
+                        mergedGeometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
+                      } else {
+                        mergedGeometry.computeVertexNormals()
+                      }
+                    }
+                  }
+                } catch (error) {
+                  console.error('Error merging geometries:', error)
+                  // Fallback to first geometry
+                  mergedGeometry = geometries[0]
+                }
+                
+                // Ensure normals are computed
+                if (!mergedGeometry.attributes.normal || mergedGeometry.attributes.normal.count === 0) {
+                  mergedGeometry.computeVertexNormals()
+                }
+                
+                // Dispose old geometry
+                if (meshRef.current.geometry) {
+                  meshRef.current.geometry.dispose()
+                }
+                
+                // Center and scale the geometry to fit
+                mergedGeometry.computeBoundingBox()
+                const box = mergedGeometry.boundingBox
+                const center = new THREE.Vector3()
+                box.getCenter(center)
+                const size = box.getSize(new THREE.Vector3())
+                const maxDim = Math.max(size.x, size.y, size.z)
+                const scale = 2 / maxDim // Scale to fit in a 2-unit box
+                
+                // Center the geometry
+                mergedGeometry.translate(-center.x, -center.y, -center.z)
+                mergedGeometry.scale(scale, scale, scale)
+                
+                // Recompute normals after transformation
+                mergedGeometry.computeVertexNormals()
+                
+                // Replace with loaded geometry
+                meshRef.current.geometry = mergedGeometry
+                
+                // Reset rotation to original position
+                meshRef.current.rotation.x = 0
+                meshRef.current.rotation.y = 0
+                meshRef.current.rotation.z = 0
+                
+                // Reset rotation speeds to default values
+                currentSettings.rotationSpeedX = 0.0
+                currentSettings.rotationSpeedY = 0.01
+                currentSettings.rotationSpeedZ = 0.0
+                
+                // Update GUI controllers to reflect the reset values
+                if (rotationSpeedXController) rotationSpeedXController.updateDisplay()
+                if (rotationSpeedYController) rotationSpeedYController.updateDisplay()
+                if (rotationSpeedZController) rotationSpeedZController.updateDisplay()
+                
+                // Update material to smooth shading for better OBJ appearance
+                if (meshRef.current.material) {
+                  meshRef.current.material.flatShading = false
+                  meshRef.current.material.needsUpdate = true
+                }
+                
+                // Mark that we have a custom OBJ loaded
+                hasCustomObjRef.current = true
+                
+                // Update input mode to 3D Model
+                currentSettings.inputMode = '3D Model'
+                
+                // Update settings without replacing geometry
+                setSettings({ ...currentSettings })
+                imageDataCacheRef.current = null
+                edgeMapCacheRef.current = null
+                lastInputHashRef.current = ''
+              } else {
+                console.error('No geometry found in OBJ file')
+                alert('Error: No valid geometry found in the OBJ file')
+              }
+            } catch (error) {
+              console.error('Error loading OBJ file:', error)
+              alert('Error loading OBJ file: ' + error.message)
+            }
+          }
+          reader.onerror = () => {
+            console.error('Error reading file')
+            alert('Error reading file')
+          }
+          reader.readAsText(file)
+        }
       }
       input.click()
     }}
@@ -1138,12 +1335,17 @@ const ASCIIGenerator = () => {
           if (pickerContainer._reactRoot) {
             pickerContainer._reactRoot.render(
               <GlyphPicker
+                key={Date.now()}
                 glyphs={currentSettings.glyphCollection}
                 value={currentSettings.edgeGlyph}
                 onChange={(glyph) => {
                   currentSettings.edgeGlyph = glyph
                   edgeGlyphController.updateDisplay()
                   updateSettings()
+                  // Small delay to ensure value is updated before re-render
+                  setTimeout(() => {
+                    updateEdgeGlyphPicker()
+                  }, 0)
                 }}
                 controller={edgeGlyphController}
               />
@@ -1161,6 +1363,10 @@ const ASCIIGenerator = () => {
               currentSettings.edgeGlyph = glyph
               edgeGlyphController.updateDisplay()
               updateSettings()
+              // Small delay to ensure value is updated before re-render
+              setTimeout(() => {
+                updateEdgeGlyphPicker()
+              }, 0)
             }}
             controller={edgeGlyphController}
           />
@@ -1277,12 +1483,17 @@ const ASCIIGenerator = () => {
             if (pickerContainer._reactRoot) {
               pickerContainer._reactRoot.render(
                 <GlyphPicker
+                  key={Date.now()}
                   glyphs={currentSettings.glyphCollection}
                   value={step.glyph}
                   onChange={(glyph) => {
                     step.glyph = glyph
                     glyphController.updateDisplay()
                     updateSettings()
+                    // Small delay to ensure value is updated before re-render
+                    setTimeout(() => {
+                      updateGlyphPicker()
+                    }, 0)
                   }}
                   controller={glyphController}
                 />
@@ -1300,6 +1511,10 @@ const ASCIIGenerator = () => {
                 step.glyph = glyph
                 glyphController.updateDisplay()
                 updateSettings()
+                // Small delay to ensure value is updated before re-render
+                setTimeout(() => {
+                  updateGlyphPicker()
+                }, 0)
               }}
               controller={glyphController}
             />
@@ -1378,8 +1593,12 @@ const ASCIIGenerator = () => {
 
       
       if (currentSettings.inputMode === '3D Model' && currentSettings.motionMode === 'Motion' && meshRef.current) {
-        meshRef.current.rotation.x += 0.005 * speed
-        meshRef.current.rotation.y += 0.01 * speed
+        const rotX = currentSettings.rotationSpeedX !== undefined ? currentSettings.rotationSpeedX : 0.0
+        const rotY = currentSettings.rotationSpeedY !== undefined ? currentSettings.rotationSpeedY : 0.01
+        const rotZ = currentSettings.rotationSpeedZ !== undefined ? currentSettings.rotationSpeedZ : 0.0
+        meshRef.current.rotation.x += rotX * speed
+        meshRef.current.rotation.y += rotY * speed
+        meshRef.current.rotation.z += rotZ * speed
       }
 
       

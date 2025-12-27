@@ -3,6 +3,10 @@ import { createRoot } from 'react-dom/client'
 import GUI from 'lil-gui'
 import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
+import { FFmpeg } from '@ffmpeg/ffmpeg'
+import { fetchFile, toBlobURL } from '@ffmpeg/util'
+import JSZip from 'jszip'
+import GIF from 'gif.js'
 import GlyphPicker from './GlyphPicker'
 import PresetPicker from './PresetPicker'
 import './ASCIIGenerator.css'
@@ -33,6 +37,12 @@ const ASCIIGenerator = () => {
   const imageRef = useRef(null)
   const animationFrameRef = useRef(null)
   const hasCustomObjRef = useRef(false)
+  const ffmpegRef = useRef(null)
+  const isCapturingRef = useRef(false)
+  const capturedFramesRef = useRef([])
+  const captureCallbackRef = useRef(null)
+  const captureStartTimeRef = useRef(null)
+  const captureDurationRef = useRef(null)
   
   
   const settingsRef = useRef({
@@ -127,17 +137,94 @@ const ASCIIGenerator = () => {
   const [settings, setSettings] = useState(settingsRef.current)
   const isPausedRef = useRef(false)
 
+  
+  const loadSettingsFromStorage = useCallback(() => {
+    try {
+      const saved = localStorage.getItem('asciiGeneratorSettings')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        
+        Object.assign(settingsRef.current, parsed)
+        setSettings({ ...settingsRef.current })
+        return true
+      }
+    } catch (error) {
+      console.warn('Error loading settings from localStorage:', error)
+    }
+    return false
+  }, [])
+
+  
+  const saveSettingsToStorage = useCallback(() => {
+    try {
+      const currentSettings = settingsRef.current
+      
+      const settingsToSave = {
+        framerate: currentSettings.framerate,
+        preset: currentSettings.preset,
+        width: currentSettings.width,
+        height: currentSettings.height,
+        showInputCanvas: currentSettings.showInputCanvas,
+        inputMode: currentSettings.inputMode,
+        sourceObject: currentSettings.sourceObject,
+        motionMode: currentSettings.motionMode,
+        zoom: currentSettings.zoom,
+        motionSpeed: currentSettings.motionSpeed,
+        rotationSpeedX: currentSettings.rotationSpeedX,
+        rotationSpeedY: currentSettings.rotationSpeedY,
+        rotationSpeedZ: currentSettings.rotationSpeedZ,
+        tilesPerRow: currentSettings.tilesPerRow,
+        gridLines: currentSettings.gridLines,
+        gridLineWidth: currentSettings.gridLineWidth,
+        gridLineColor: currentSettings.gridLineColor,
+        gridSizeAnimation: currentSettings.gridSizeAnimation,
+        minSize: currentSettings.minSize,
+        maxSize: currentSettings.maxSize,
+        speed: currentSettings.speed,
+        glyphAnimation: currentSettings.glyphAnimation,
+        animationSpeed: currentSettings.animationSpeed,
+        minGlyphScale: currentSettings.minGlyphScale,
+        maxGlyphScale: currentSettings.maxGlyphScale,
+        waveTiles: currentSettings.waveTiles,
+        invertGrayscale: currentSettings.invertGrayscale,
+        transparentBG: currentSettings.transparentBG,
+        intensity: currentSettings.intensity,
+        enableEdges: currentSettings.enableEdges,
+        edgeThreshold: currentSettings.edgeThreshold,
+        edgeGlyph: currentSettings.edgeGlyph,
+        edgeColor: currentSettings.edgeColor,
+        edgeBG: currentSettings.edgeBG,
+        steps: currentSettings.steps.map(step => ({
+          name: step.name,
+          glyph: step.glyph,
+          glyphColor: step.glyphColor,
+          bgColor: step.bgColor,
+          minGray: step.minGray,
+          maxGray: step.maxGray
+        })),
+        glyphCollection: currentSettings.glyphCollection
+      }
+      localStorage.setItem('asciiGeneratorSettings', JSON.stringify(settingsToSave))
+    } catch (error) {
+      console.warn('Error saving settings to localStorage:', error)
+    }
+  }, [])
+
   const updateSettings = useCallback(() => {
     const currentSettings = settingsRef.current
     setSettings({ ...currentSettings })
     
     
+    saveSettingsToStorage()
+    
+    
     imageDataCacheRef.current = null
     edgeMapCacheRef.current = null
     lastInputHashRef.current = ''
+    stepLookupRef.current = null 
     
     
-    // Only replace geometry if we don't have a custom OBJ loaded
+    
     if (meshRef.current && currentSettings.sourceObject && !hasCustomObjRef.current) {
       const geometry = modelPresets[currentSettings.sourceObject]()
       if (meshRef.current.geometry) {
@@ -163,6 +250,10 @@ const ASCIIGenerator = () => {
   const edgeMapCacheRef = useRef(null)
   const lastInputHashRef = useRef('')
   
+  
+  const colorCacheRef = useRef(new Map())
+  const stepLookupRef = useRef(null)
+  const glyphCanvasCacheRef = useRef(new Map())
   
   const stepControllersRef = useRef([])
   
@@ -537,6 +628,41 @@ const ASCIIGenerator = () => {
     }
   }
 
+  
+  const parseColor = useCallback((colorStr) => {
+    if (colorCacheRef.current.has(colorStr)) {
+      return colorCacheRef.current.get(colorStr)
+    }
+    let r, g, b
+    if (colorStr.startsWith('#')) {
+      r = parseInt(colorStr.slice(1, 3), 16)
+      g = parseInt(colorStr.slice(3, 5), 16)
+      b = parseInt(colorStr.slice(5, 7), 16)
+    } else {
+      r = g = b = 255
+    }
+    const result = { r, g, b }
+    colorCacheRef.current.set(colorStr, result)
+    return result
+  }, [])
+
+  
+  const buildStepLookup = useCallback((steps) => {
+    const lookup = new Array(256)
+    for (let gray = 0; gray <= 255; gray++) {
+      let step = steps.find(s => gray >= s.minGray && gray <= s.maxGray)
+      if (!step) {
+        step = steps.reduce((closest, s) => {
+          const dist = Math.abs((s.minGray + s.maxGray) / 2 - gray)
+          const closestDist = Math.abs((closest.minGray + closest.maxGray) / 2 - gray)
+          return dist < closestDist ? s : closest
+        })
+      }
+      lookup[gray] = step
+    }
+    return lookup
+  }, [])
+
   const updateOutputCanvas = useCallback((time) => {
     const currentSettings = settingsRef.current
     const outputCanvas = outputCanvasRef.current
@@ -641,6 +767,21 @@ const ASCIIGenerator = () => {
     const tilesPerCol = Math.ceil(currentSettings.height / baseTileHeight)
 
     
+    if (!stepLookupRef.current) {
+      stepLookupRef.current = buildStepLookup(currentSettings.steps)
+    }
+    const stepLookup = stepLookupRef.current
+    
+    
+    let gridLineColorParsed = null
+    if (currentSettings.gridLines > 0 && currentSettings.gridLineWidth > 0) {
+      gridLineColorParsed = parseColor(currentSettings.gridLineColor)
+    }
+
+    
+    const totalTiles = tilesPerCol * currentSettings.tilesPerRow
+    const adaptiveSampleFactor = totalTiles > 5000 ? 2 : totalTiles > 2000 ? 1.5 : 1
+    
     let edgeMap = null
     if (currentSettings.enableEdges) {
       const edgeCacheKey = `${inputHash}-${currentSettings.edgeThreshold}`
@@ -727,9 +868,14 @@ const ASCIIGenerator = () => {
         let maxEdgeStrength = 0
         
         if (currentSettings.enableEdges && edgeMap) {
-          const sampleSize = Math.max(1, Math.floor(baseTileWidth / 4))
-          for (let sy = 0; sy < baseTileHeight; sy += sampleSize) {
-            for (let sx = 0; sx < baseTileWidth; sx += sampleSize) {
+          
+          const sampleSize = Math.max(1, Math.floor(baseTileWidth / (4 * adaptiveSampleFactor)))
+          const maxSamples = Math.ceil(baseTileHeight / sampleSize) * Math.ceil(baseTileWidth / sampleSize)
+          let samplesChecked = 0
+          const maxSamplesToCheck = Math.min(maxSamples, 16) 
+          
+          for (let sy = 0; sy < baseTileHeight && samplesChecked < maxSamplesToCheck; sy += sampleSize) {
+            for (let sx = 0; sx < baseTileWidth && samplesChecked < maxSamplesToCheck; sx += sampleSize) {
               const px = Math.floor(tx * baseTileWidth + sx)
               const py = Math.floor(ty * baseTileHeight + sy)
               
@@ -738,9 +884,12 @@ const ASCIIGenerator = () => {
                 if (edgeStrength > currentSettings.edgeThreshold) {
                   hasEdge = true
                   maxEdgeStrength = Math.max(maxEdgeStrength, edgeStrength)
+                  break 
                 }
+                samplesChecked++
               }
             }
+            if (hasEdge) break
           }
         }
 
@@ -750,14 +899,21 @@ const ASCIIGenerator = () => {
         let sampleCount = 0
 
         
-        const sampleSize = Math.max(2, Math.floor(baseTileWidth / 3))
+        const sampleSize = Math.max(2, Math.floor(baseTileWidth / (3 * adaptiveSampleFactor)))
         const startX = Math.floor(tx * baseTileWidth)
         const startY = Math.floor(ty * baseTileHeight)
         const endX = Math.min(startX + baseTileWidth, currentSettings.width)
         const endY = Math.min(startY + baseTileHeight, currentSettings.height)
         
-        for (let py = startY; py < endY; py += sampleSize) {
-          for (let px = startX; px < endX; px += sampleSize) {
+        
+        const maxSamples = Math.min(
+          Math.ceil((endY - startY) / sampleSize) * Math.ceil((endX - startX) / sampleSize),
+          totalTiles > 5000 ? 4 : totalTiles > 2000 ? 9 : 16
+        )
+        
+        let samplesTaken = 0
+        for (let py = startY; py < endY && samplesTaken < maxSamples; py += sampleSize) {
+          for (let px = startX; px < endX && samplesTaken < maxSamples; px += sampleSize) {
             if (px < currentSettings.width && py < currentSettings.height) {
               const idx = (py * currentSettings.width + px) * 4
               const r = imageData.data[idx]
@@ -768,6 +924,7 @@ const ASCIIGenerator = () => {
               const gray = (r * 0.299 + g * 0.587 + b * 0.114)
               totalGray += gray
               sampleCount++
+              samplesTaken++
             }
           }
         }
@@ -777,7 +934,6 @@ const ASCIIGenerator = () => {
         
         
         if (currentSettings.intensity !== 1.0) {
-          
           const centered = normalizedGray - 128
           const intensified = centered * currentSettings.intensity
           normalizedGray = Math.max(0, Math.min(255, 128 + intensified))
@@ -790,17 +946,8 @@ const ASCIIGenerator = () => {
           ctx.fillRect(x, y, drawWidth, drawHeight)
 
           
-          if (currentSettings.gridLines > 0 && currentSettings.gridLineWidth > 0) {
-            
-            let r, g, b
-            if (currentSettings.gridLineColor.startsWith('#')) {
-              r = parseInt(currentSettings.gridLineColor.slice(1, 3), 16)
-              g = parseInt(currentSettings.gridLineColor.slice(3, 5), 16)
-              b = parseInt(currentSettings.gridLineColor.slice(5, 7), 16)
-            } else {
-              r = g = b = 255 
-            }
-            ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${currentSettings.gridLines})`
+          if (currentSettings.gridLines > 0 && currentSettings.gridLineWidth > 0 && gridLineColorParsed) {
+            ctx.strokeStyle = `rgba(${gridLineColorParsed.r}, ${gridLineColorParsed.g}, ${gridLineColorParsed.b}, ${currentSettings.gridLines})`
             ctx.lineWidth = currentSettings.gridLineWidth
             ctx.strokeRect(x, y, drawWidth, drawHeight)
           }
@@ -819,18 +966,9 @@ const ASCIIGenerator = () => {
         }
 
         
-        let step = currentSettings.steps.find(s => 
-          normalizedGray >= s.minGray && normalizedGray <= s.maxGray
-        )
         
-        if (!step) {
-          
-          step = currentSettings.steps.reduce((closest, s) => {
-            const dist = Math.abs((s.minGray + s.maxGray) / 2 - normalizedGray)
-            const closestDist = Math.abs((closest.minGray + closest.maxGray) / 2 - normalizedGray)
-            return dist < closestDist ? s : closest
-          })
-        }
+        const grayIndex = Math.round(Math.max(0, Math.min(255, normalizedGray)))
+        const step = stepLookup[grayIndex]
 
         
         let glyphScale = 1
@@ -862,17 +1000,8 @@ const ASCIIGenerator = () => {
         ctx.fillRect(x, y, drawWidth, drawHeight)
 
         
-        if (currentSettings.gridLines > 0 && currentSettings.gridLineWidth > 0) {
-          
-          let r, g, b
-          if (currentSettings.gridLineColor.startsWith('#')) {
-            r = parseInt(currentSettings.gridLineColor.slice(1, 3), 16)
-            g = parseInt(currentSettings.gridLineColor.slice(3, 5), 16)
-            b = parseInt(currentSettings.gridLineColor.slice(5, 7), 16)
-          } else {
-            r = g = b = 255 
-          }
-          ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${currentSettings.gridLines})`
+        if (currentSettings.gridLines > 0 && currentSettings.gridLineWidth > 0 && gridLineColorParsed) {
+          ctx.strokeStyle = `rgba(${gridLineColorParsed.r}, ${gridLineColorParsed.g}, ${gridLineColorParsed.b}, ${currentSettings.gridLines})`
           ctx.lineWidth = currentSettings.gridLineWidth
           ctx.strokeRect(x, y, drawWidth, drawHeight)
         }
@@ -894,6 +1023,9 @@ const ASCIIGenerator = () => {
   useEffect(() => {
     if (!containerRef.current || !canvas3DRef.current) return
 
+    
+    loadSettingsFromStorage()
+    
     const currentSettings = settingsRef.current
 
     
@@ -926,7 +1058,7 @@ const ASCIIGenerator = () => {
       flatShading: true
     })
     const mesh = new THREE.Mesh(geometry, material)
-    // Initialize rotation to 0 (original position)
+    
     mesh.rotation.x = 0
     mesh.rotation.y = 0
     mesh.rotation.z = 0
@@ -989,7 +1121,7 @@ const ASCIIGenerator = () => {
     })
     inputFolder.add(currentSettings, 'inputMode', ['3D Model', 'Image', 'Video']).onChange(updateSettings)
     inputFolder.add(currentSettings, 'sourceObject', Object.keys(modelPresets)).onChange(() => {
-      // Reset custom OBJ flag when selecting a preset
+      
       hasCustomObjRef.current = false
       
       if (meshRef.current) {
@@ -998,7 +1130,7 @@ const ASCIIGenerator = () => {
           meshRef.current.geometry.dispose()
         }
         meshRef.current.geometry = geometry
-        // Reset rotation to original position
+        
         meshRef.current.rotation.x = 0
         meshRef.current.rotation.y = 0
         meshRef.current.rotation.z = 0
@@ -1009,13 +1141,13 @@ const ASCIIGenerator = () => {
     inputFolder.add(currentSettings, 'zoom', 0.1, 5).onChange(updateSettings)
     inputFolder.add(currentSettings, 'motionSpeed', 0, 5).name('Animation Speed').onChange(updateSettings)
     
-    // Rotation controls
+    
     const rotationFolder = inputFolder.addFolder('Rotation Control')
     const rotationSpeedXController = rotationFolder.add(currentSettings, 'rotationSpeedX', -0.05, 0.05).name('Rotation Speed X').onChange(updateSettings)
     const rotationSpeedYController = rotationFolder.add(currentSettings, 'rotationSpeedY', -0.05, 0.05).name('Rotation Speed Y').onChange(updateSettings)
     const rotationSpeedZController = rotationFolder.add(currentSettings, 'rotationSpeedZ', -0.05, 0.05).name('Rotation Speed Z').onChange(updateSettings)
     
-    // Reset rotation button
+    
     const resetRotationBtn = { reset: () => {
       if (meshRef.current) {
         meshRef.current.rotation.x = 0
@@ -1039,27 +1171,27 @@ const ASCIIGenerator = () => {
               const objContent = event.target.result
               const object = loader.parse(objContent)
               
-              // Collect all geometries from the loaded object
+              
               const geometries = []
               object.traverse((child) => {
                 if (child instanceof THREE.Mesh && child.geometry) {
-                  // Clone each geometry to avoid issues
+                  
                   const cloned = child.geometry.clone()
-                  // Apply any transformations from the child if needed
-                  // Most OBJ files don't have complex transformations, so we'll skip matrix application
-                  // to avoid issues with different Three.js versions
+                  
+                  
+                  
                   geometries.push(cloned)
                 }
               })
               
               if (geometries.length > 0) {
-                // Combine all geometries into one
+                
                 let mergedGeometry
                 try {
                   if (geometries.length === 1) {
                     mergedGeometry = geometries[0]
                   } else {
-                    // Try to use BufferGeometryUtils if available
+                    
                     let useUtils = false
                     try {
                       const utils = await import('three/examples/jsm/utils/BufferGeometryUtils.js')
@@ -1068,17 +1200,17 @@ const ASCIIGenerator = () => {
                         useUtils = true
                       }
                     } catch (e) {
-                      // BufferGeometryUtils not available, use manual merge
+                      
                     }
                     
                     if (!useUtils) {
-                      // Fallback: manual merge
+                      
                       mergedGeometry = new THREE.BufferGeometry()
                       const positions = []
                       const normals = []
                       
                       for (const geom of geometries) {
-                        // Ensure normals are computed
+                        
                         if (!geom.attributes.normal || geom.attributes.normal.count === 0) {
                           geom.computeVertexNormals()
                         }
@@ -1088,7 +1220,7 @@ const ASCIIGenerator = () => {
                         const index = geom.index
                         
                         if (index) {
-                          // Indexed geometry - expand indices
+                          
                           for (let i = 0; i < index.count; i++) {
                             const idx = index.getX(i)
                             positions.push(pos.getX(idx), pos.getY(idx), pos.getZ(idx))
@@ -1097,7 +1229,7 @@ const ASCIIGenerator = () => {
                             }
                           }
                         } else {
-                          // Non-indexed geometry
+                          
                           for (let i = 0; i < pos.count; i++) {
                             positions.push(pos.getX(i), pos.getY(i), pos.getZ(i))
                             if (norm) {
@@ -1117,67 +1249,67 @@ const ASCIIGenerator = () => {
                   }
                 } catch (error) {
                   console.error('Error merging geometries:', error)
-                  // Fallback to first geometry
+                  
                   mergedGeometry = geometries[0]
                 }
                 
-                // Ensure normals are computed
+                
                 if (!mergedGeometry.attributes.normal || mergedGeometry.attributes.normal.count === 0) {
                   mergedGeometry.computeVertexNormals()
                 }
                 
-                // Dispose old geometry
+                
                 if (meshRef.current.geometry) {
                   meshRef.current.geometry.dispose()
                 }
                 
-                // Center and scale the geometry to fit
+                
                 mergedGeometry.computeBoundingBox()
                 const box = mergedGeometry.boundingBox
                 const center = new THREE.Vector3()
                 box.getCenter(center)
                 const size = box.getSize(new THREE.Vector3())
                 const maxDim = Math.max(size.x, size.y, size.z)
-                const scale = 2 / maxDim // Scale to fit in a 2-unit box
+                const scale = 2 / maxDim 
                 
-                // Center the geometry
+                
                 mergedGeometry.translate(-center.x, -center.y, -center.z)
                 mergedGeometry.scale(scale, scale, scale)
                 
-                // Recompute normals after transformation
+                
                 mergedGeometry.computeVertexNormals()
                 
-                // Replace with loaded geometry
+                
                 meshRef.current.geometry = mergedGeometry
                 
-                // Reset rotation to original position
+                
                 meshRef.current.rotation.x = 0
                 meshRef.current.rotation.y = 0
                 meshRef.current.rotation.z = 0
                 
-                // Reset rotation speeds to default values
+                
                 currentSettings.rotationSpeedX = 0.0
                 currentSettings.rotationSpeedY = 0.01
                 currentSettings.rotationSpeedZ = 0.0
                 
-                // Update GUI controllers to reflect the reset values
+                
                 if (rotationSpeedXController) rotationSpeedXController.updateDisplay()
                 if (rotationSpeedYController) rotationSpeedYController.updateDisplay()
                 if (rotationSpeedZController) rotationSpeedZController.updateDisplay()
                 
-                // Update material to smooth shading for better OBJ appearance
+                
                 if (meshRef.current.material) {
                   meshRef.current.material.flatShading = false
                   meshRef.current.material.needsUpdate = true
                 }
                 
-                // Mark that we have a custom OBJ loaded
+                
                 hasCustomObjRef.current = true
                 
-                // Update input mode to 3D Model
+                
                 currentSettings.inputMode = '3D Model'
                 
-                // Update settings without replacing geometry
+                
                 setSettings({ ...currentSettings })
                 imageDataCacheRef.current = null
                 edgeMapCacheRef.current = null
@@ -1282,6 +1414,632 @@ const ASCIIGenerator = () => {
       }, 'image/png')
     }}
     controlsFolder.add(downloadBtn, 'download').name('💾 Download')
+    
+    
+    const resetSettingsBtn = { reset: () => {
+      if (confirm('Reset all saved settings to defaults? This will clear your saved configuration.')) {
+        localStorage.removeItem('asciiGeneratorSettings')
+        location.reload() 
+      }
+    }}
+    controlsFolder.add(resetSettingsBtn, 'reset').name('🔄 Reset Saved Settings')
+    
+     
+    const videoExportSettings = {
+      duration: 5, 
+      fps: 24
+    }
+    
+    
+    const initFFmpeg = async () => {
+      if (ffmpegRef.current) return ffmpegRef.current
+      
+      const ffmpeg = new FFmpeg()
+      ffmpegRef.current = ffmpeg
+      
+      try {
+        const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm'
+        await ffmpeg.load({
+          coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+        })
+        console.log('FFmpeg loaded successfully')
+        return ffmpeg
+      } catch (error) {
+        console.error('Error loading FFmpeg:', error)
+        throw error
+      }
+    }
+    
+    
+    const exportVideoBtn = { export: async () => {
+      if (isCapturingRef.current) {
+        alert('A capture is already in progress. Please wait.')
+        return
+      }
+      
+      const canvas = outputCanvasRef.current
+      if (!canvas) {
+        alert('No canvas available')
+        return
+      }
+      
+      const duration = videoExportSettings.duration
+      
+      
+      const confirmed = confirm(
+        `Start video capture?\n\n` +
+        `Duration: ${duration} seconds\n` +
+        `All frames rendered during ${duration} seconds will be captured.\n\n` +
+        `This will take approximately ${duration} seconds of capture + processing time.`
+      )
+      
+      if (!confirmed) return
+      
+      isCapturingRef.current = true
+      captureStartTimeRef.current = performance.now()
+      captureDurationRef.current = duration
+      capturedFramesRef.current = []
+      
+      
+      const progressMsg = document.createElement('div')
+      progressMsg.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 15px 20px;
+        border-radius: 8px;
+        z-index: 10000;
+        font-family: monospace;
+        font-size: 14px;
+      `
+      document.body.appendChild(progressMsg)
+      
+      const updateProgress = (text) => {
+        progressMsg.textContent = text
+      }
+      
+      let frameCount = 0
+      let firstFrameTime = null
+      let lastFrameTime = null
+      
+      try {
+        
+        updateProgress(`Capturing frames...`)
+        
+        
+        captureCallbackRef.current = async (time, elapsed) => {
+          if (!isCapturingRef.current) return
+          
+          if (firstFrameTime === null) {
+            firstFrameTime = performance.now()
+          }
+          lastFrameTime = performance.now()
+          
+          const blob = await captureFrameFromCanvas(canvas)
+          if (blob) {
+            capturedFramesRef.current.push(blob)
+            frameCount++
+            updateProgress(`Capturing frames... ${frameCount} frames (${elapsed.toFixed(1)}s / ${duration}s)`)
+          }
+        }
+        
+        
+        await new Promise(resolve => {
+          const checkInterval = setInterval(() => {
+            if (!isCapturingRef.current) {
+              clearInterval(checkInterval)
+              resolve()
+            }
+          }, 100)
+        })
+        
+        if (capturedFramesRef.current.length === 0) {
+          alert('No frames were captured')
+          document.body.removeChild(progressMsg)
+          isCapturingRef.current = false
+          captureCallbackRef.current = null
+          return
+        }
+        
+        
+        const totalTime = (lastFrameTime - firstFrameTime) / 1000 
+        const actualFps = capturedFramesRef.current.length / totalTime
+        
+        
+        updateProgress('Initializing FFmpeg...')
+        const ffmpeg = await initFFmpeg()
+        
+        
+        updateProgress(`Processing ${capturedFramesRef.current.length} frames...`)
+        
+        for (let i = 0; i < capturedFramesRef.current.length; i++) {
+          const frameNumber = String(i).padStart(6, '0')
+          const frameName = `frame${frameNumber}.png`
+          await ffmpeg.writeFile(frameName, await fetchFile(capturedFramesRef.current[i]))
+        }
+        
+        
+        updateProgress('Generating MP4 video...')
+        
+        const outputFileName = `output-${Date.now()}.mp4`
+        
+        await ffmpeg.exec([
+          '-framerate', String(actualFps.toFixed(2)),
+          '-i', 'frame%06d.png',
+          '-c:v', 'libx264',
+          '-pix_fmt', 'yuv420p',
+          '-crf', '18', 
+          '-preset', 'medium',
+          '-y',
+          outputFileName
+        ])
+        
+        
+        updateProgress('Finalizing...')
+        
+        const data = await ffmpeg.readFile(outputFileName)
+        const videoBlob = new Blob([data], { type: 'video/mp4' })
+        const url = URL.createObjectURL(videoBlob)
+        
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `ascii-art-${Date.now()}.mp4`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        
+        
+        URL.revokeObjectURL(url)
+        
+        
+        try {
+          await ffmpeg.deleteFile(outputFileName)
+          for (let i = 0; i < capturedFramesRef.current.length; i++) {
+            const frameNumber = String(i).padStart(6, '0')
+            await ffmpeg.deleteFile(`frame${frameNumber}.png`)
+          }
+        } catch (e) {
+          console.warn('Error cleaning up FFmpeg files:', e)
+        }
+        
+        updateProgress(`✅ Video generated successfully!`)
+        setTimeout(() => {
+          if (document.body.contains(progressMsg)) {
+            document.body.removeChild(progressMsg)
+          }
+        }, 2000)
+        
+        capturedFramesRef.current = []
+        
+      } catch (error) {
+        console.error('Error exporting video:', error)
+        alert(`Error exporting video: ${error.message}`)
+        if (document.body.contains(progressMsg)) {
+          document.body.removeChild(progressMsg)
+        }
+      } finally {
+        isCapturingRef.current = false
+        captureCallbackRef.current = null
+      }
+    }}
+    
+    
+    const captureFrameFromCanvas = (canvas) => {
+      return new Promise((resolve) => {
+        
+        requestAnimationFrame(() => {
+          canvas.toBlob((blob) => {
+            resolve(blob)
+          }, 'image/png')
+        })
+      })
+    }
+    
+    
+    const captureImageDataFromCanvas = (canvas) => {
+      return new Promise((resolve) => {
+        
+        requestAnimationFrame(() => {
+          const ctx = canvas.getContext('2d')
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+          resolve(imageData)
+        })
+      })
+    }
+    
+    
+    const exportFramesBtn = { export: async () => {
+      if (isCapturingRef.current) {
+        alert('A capture is already in progress. Please wait.')
+        return
+      }
+      
+      const canvas = outputCanvasRef.current
+      if (!canvas) {
+        alert('No canvas available')
+        return
+      }
+      
+      const duration = videoExportSettings.duration
+      
+      const confirmed = confirm(
+        `Start individual frame capture?\n\n` +
+        `Duration: ${duration} seconds\n` +
+        `All frames rendered during ${duration} seconds will be captured.\n\n` +
+        `Frames will be downloaded as individual PNG files.`
+      )
+      
+      if (!confirmed) return
+      
+      isCapturingRef.current = true
+      captureStartTimeRef.current = performance.now()
+      captureDurationRef.current = duration
+      
+      const progressMsg = document.createElement('div')
+      progressMsg.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 15px 20px;
+        border-radius: 8px;
+        z-index: 10000;
+        font-family: monospace;
+        font-size: 14px;
+      `
+      document.body.appendChild(progressMsg)
+      
+      const updateProgress = (text) => {
+        progressMsg.textContent = text
+      }
+      
+      let frameCount = 0
+      const capturedFrames = []
+      
+      try {
+        updateProgress(`Capturing frames...`)
+        
+        
+        captureCallbackRef.current = async (time, elapsed) => {
+          if (!isCapturingRef.current) return
+          
+          const blob = await captureFrameFromCanvas(canvas)
+          if (blob) {
+            capturedFrames.push({ index: frameCount, blob: blob })
+            frameCount++
+            updateProgress(`Capturing frames... ${frameCount} frames (${elapsed.toFixed(1)}s / ${duration}s)`)
+          }
+        }
+        
+        
+        await new Promise(resolve => {
+          const checkInterval = setInterval(() => {
+            if (!isCapturingRef.current) {
+              clearInterval(checkInterval)
+              resolve()
+            }
+          }, 100)
+        })
+        
+        
+        updateProgress(`Downloading ${frameCount} frames...`)
+        for (let i = 0; i < capturedFrames.length; i++) {
+          const frame = capturedFrames[i]
+          const url = URL.createObjectURL(frame.blob)
+          const link = document.createElement('a')
+          link.href = url
+          link.download = `frame-${String(frame.index).padStart(6, '0')}.png`
+          document.body.appendChild(link)
+          link.click()
+          document.body.removeChild(link)
+          URL.revokeObjectURL(url)
+          
+          
+          if (i < capturedFrames.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 50))
+          }
+        }
+        
+        updateProgress(`✅ ${frameCount} frames downloaded!`)
+        setTimeout(() => {
+          if (document.body.contains(progressMsg)) {
+            document.body.removeChild(progressMsg)
+          }
+        }, 2000)
+        
+      } catch (error) {
+        console.error('Error exporting frames:', error)
+        alert(`Error exporting frames: ${error.message}`)
+        if (document.body.contains(progressMsg)) {
+          document.body.removeChild(progressMsg)
+        }
+      } finally {
+        isCapturingRef.current = false
+        captureCallbackRef.current = null
+      }
+    }}
+    
+    
+    const exportFramesZipBtn = { export: async () => {
+      if (isCapturingRef.current) {
+        alert('A capture is already in progress. Please wait.')
+        return
+      }
+      
+      const canvas = outputCanvasRef.current
+      if (!canvas) {
+        alert('No canvas available')
+        return
+      }
+      
+      const duration = videoExportSettings.duration
+      
+      const confirmed = confirm(
+        `Start ZIP frame capture?\n\n` +
+        `Duration: ${duration} seconds\n` +
+        `All frames rendered during ${duration} seconds will be captured.\n\n` +
+        `A ZIP file will be created with all frames.`
+      )
+      
+      if (!confirmed) return
+      
+      isCapturingRef.current = true
+      captureStartTimeRef.current = performance.now()
+      captureDurationRef.current = duration
+      const capturedFrames = []
+      
+      const progressMsg = document.createElement('div')
+      progressMsg.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 15px 20px;
+        border-radius: 8px;
+        z-index: 10000;
+        font-family: monospace;
+        font-size: 14px;
+      `
+      document.body.appendChild(progressMsg)
+      
+      const updateProgress = (text) => {
+        progressMsg.textContent = text
+      }
+      
+      let frameCount = 0
+      
+      try {
+        updateProgress(`Capturing frames...`)
+        
+        
+        captureCallbackRef.current = async (time, elapsed) => {
+          if (!isCapturingRef.current) return
+          
+          const blob = await captureFrameFromCanvas(canvas)
+          if (blob) {
+            capturedFrames.push({
+              index: frameCount,
+              blob: blob
+            })
+            frameCount++
+            updateProgress(`Capturing frames... ${frameCount} frames (${elapsed.toFixed(1)}s / ${duration}s)`)
+          }
+        }
+        
+        
+        await new Promise(resolve => {
+          const checkInterval = setInterval(() => {
+            if (!isCapturingRef.current) {
+              clearInterval(checkInterval)
+              resolve()
+            }
+          }, 100)
+        })
+        
+        if (capturedFrames.length === 0) {
+          alert('No frames were captured')
+          document.body.removeChild(progressMsg)
+          isCapturingRef.current = false
+          captureCallbackRef.current = null
+          return
+        }
+        
+        
+        updateProgress(`Creating ZIP file...`)
+        const zip = new JSZip()
+        
+        for (const frame of capturedFrames) {
+          const frameNumber = String(frame.index).padStart(6, '0')
+          zip.file(`frame-${frameNumber}.png`, frame.blob)
+        }
+        
+        const zipBlob = await zip.generateAsync({ type: 'blob' })
+        const url = URL.createObjectURL(zipBlob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `ascii-art-frames-${Date.now()}.zip`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        URL.revokeObjectURL(url)
+        
+        updateProgress(`✅ ZIP created with ${frameCount} frames!`)
+        setTimeout(() => {
+          if (document.body.contains(progressMsg)) {
+            document.body.removeChild(progressMsg)
+          }
+        }, 2000)
+        
+      } catch (error) {
+        console.error('Error exporting frames ZIP:', error)
+        alert(`Error exporting frames ZIP: ${error.message}`)
+        if (document.body.contains(progressMsg)) {
+          document.body.removeChild(progressMsg)
+        }
+      } finally {
+        isCapturingRef.current = false
+        captureCallbackRef.current = null
+      }
+    }}
+    
+    
+    const exportGifBtn = { export: async () => {
+      if (isCapturingRef.current) {
+        alert('A capture is already in progress. Please wait.')
+        return
+      }
+      
+      const canvas = outputCanvasRef.current
+      if (!canvas) {
+        alert('No canvas available')
+        return
+      }
+      
+      const duration = videoExportSettings.duration
+      
+      const confirmed = confirm(
+        `Start animated GIF capture?\n\n` +
+        `Duration: ${duration} seconds\n` +
+        `All frames rendered during ${duration} seconds will be captured.\n\n` +
+        `This will take approximately ${duration} seconds of capture + processing time.`
+      )
+      
+      if (!confirmed) return
+      
+      isCapturingRef.current = true
+      captureStartTimeRef.current = performance.now()
+      captureDurationRef.current = duration
+      const capturedFrames = []
+      
+      const progressMsg = document.createElement('div')
+      progressMsg.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 15px 20px;
+        border-radius: 8px;
+        z-index: 10000;
+        font-family: monospace;
+        font-size: 14px;
+      `
+      document.body.appendChild(progressMsg)
+      
+      const updateProgress = (text) => {
+        progressMsg.textContent = text
+      }
+      
+      let frameCount = 0
+      let firstFrameTime = null
+      let lastFrameTime = null
+      
+      try {
+        updateProgress(`Capturing frames...`)
+        
+        
+        captureCallbackRef.current = async (time, elapsed) => {
+          if (!isCapturingRef.current) return
+          
+          if (firstFrameTime === null) {
+            firstFrameTime = performance.now()
+          }
+          lastFrameTime = performance.now()
+          
+          const imageData = await captureImageDataFromCanvas(canvas)
+          if (imageData) {
+            capturedFrames.push(imageData)
+            frameCount++
+            updateProgress(`Capturing frames... ${frameCount} frames (${elapsed.toFixed(1)}s / ${duration}s)`)
+          }
+        }
+        
+        
+        await new Promise(resolve => {
+          const checkInterval = setInterval(() => {
+            if (!isCapturingRef.current) {
+              clearInterval(checkInterval)
+              resolve()
+            }
+          }, 100)
+        })
+        
+        if (capturedFrames.length === 0) {
+          alert('No frames were captured')
+          document.body.removeChild(progressMsg)
+          isCapturingRef.current = false
+          captureCallbackRef.current = null
+          return
+        }
+        
+        
+        const totalTime = lastFrameTime - firstFrameTime
+        const avgFrameTime = totalTime / capturedFrames.length
+        const gifDelay = Math.round(avgFrameTime) 
+        
+        
+        updateProgress(`Generating animated GIF...`)
+        const gif = new GIF({
+          workers: 2,
+          quality: 10,
+          width: canvas.width,
+          height: canvas.height,
+          workerScript: '/gif.worker.js'
+        })
+        
+        for (const frame of capturedFrames) {
+          gif.addFrame(frame, { delay: gifDelay })
+        }
+        
+        gif.on('finished', (blob) => {
+          const url = URL.createObjectURL(blob)
+          const link = document.createElement('a')
+          link.href = url
+          link.download = `ascii-art-${Date.now()}.gif`
+          document.body.appendChild(link)
+          link.click()
+          document.body.removeChild(link)
+          URL.revokeObjectURL(url)
+          
+          updateProgress(`✅ GIF generated successfully!`)
+          setTimeout(() => {
+            if (document.body.contains(progressMsg)) {
+              document.body.removeChild(progressMsg)
+            }
+          }, 2000)
+          isCapturingRef.current = false
+          captureCallbackRef.current = null
+        })
+        
+        gif.on('progress', (p) => {
+          updateProgress(`Generating GIF... ${Math.round(p * 100)}%`)
+        })
+        
+        gif.render()
+        
+      } catch (error) {
+        console.error('Error exporting GIF:', error)
+        alert(`Error exporting GIF: ${error.message}`)
+        if (document.body.contains(progressMsg)) {
+          document.body.removeChild(progressMsg)
+        }
+        isCapturingRef.current = false
+        captureCallbackRef.current = null
+      }
+    }}
+    
+    const videoExportFolder = controlsFolder.addFolder('Video Export')
+    videoExportFolder.add(videoExportSettings, 'duration', 1, 60).name('Duration (seconds)')
+    videoExportFolder.add(videoExportSettings, 'fps', 1, 60).name('FPS')
+    videoExportFolder.add(exportVideoBtn, 'export').name('🎬 Export Video (MP4)')
+    videoExportFolder.add(exportFramesBtn, 'export').name('📸 Export Frames (Individual)')
+    videoExportFolder.add(exportFramesZipBtn, 'export').name('📦 Export Frames (ZIP)')
+    videoExportFolder.add(exportGifBtn, 'export').name('🎞️ Export GIF')
 
     
     const outputFolder = gui.addFolder('3. Output - ASCII')
@@ -1342,7 +2100,7 @@ const ASCIIGenerator = () => {
                   currentSettings.edgeGlyph = glyph
                   edgeGlyphController.updateDisplay()
                   updateSettings()
-                  // Small delay to ensure value is updated before re-render
+                  
                   setTimeout(() => {
                     updateEdgeGlyphPicker()
                   }, 0)
@@ -1363,7 +2121,7 @@ const ASCIIGenerator = () => {
               currentSettings.edgeGlyph = glyph
               edgeGlyphController.updateDisplay()
               updateSettings()
-              // Small delay to ensure value is updated before re-render
+              
               setTimeout(() => {
                 updateEdgeGlyphPicker()
               }, 0)
@@ -1490,7 +2248,7 @@ const ASCIIGenerator = () => {
                     step.glyph = glyph
                     glyphController.updateDisplay()
                     updateSettings()
-                    // Small delay to ensure value is updated before re-render
+                    
                     setTimeout(() => {
                       updateGlyphPicker()
                     }, 0)
@@ -1511,7 +2269,7 @@ const ASCIIGenerator = () => {
                 step.glyph = glyph
                 glyphController.updateDisplay()
                 updateSettings()
-                // Small delay to ensure value is updated before re-render
+                
                 setTimeout(() => {
                   updateGlyphPicker()
                 }, 0)
@@ -1633,6 +2391,18 @@ const ASCIIGenerator = () => {
 
       
       updateOutputCanvas(time)
+      
+      
+      if (isCapturingRef.current && captureCallbackRef.current) {
+        const elapsed = (performance.now() - captureStartTimeRef.current) / 1000
+        if (elapsed <= captureDurationRef.current) {
+          captureCallbackRef.current(time, elapsed)
+        } else {
+          
+          isCapturingRef.current = false
+          captureCallbackRef.current = null
+        }
+      }
     }
 
     animate()

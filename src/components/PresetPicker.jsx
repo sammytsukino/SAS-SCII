@@ -45,8 +45,8 @@ const PresetPicker = ({ presets, value, onChange, controller }) => {
         className="preset-picker-trigger"
         onClick={() => setIsOpen(!isOpen)}
         style={{
-          width: inputElement?.offsetWidth || '100%',
-          minHeight: inputElement?.offsetHeight || '20px',
+          width: '100%',
+          minHeight: '20px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -57,11 +57,15 @@ const PresetPicker = ({ presets, value, onChange, controller }) => {
           padding: '2px 8px',
           fontSize: '12px',
           fontFamily: 'monospace',
-          userSelect: 'none'
+          userSelect: 'none',
+          boxSizing: 'border-box',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
         }}
       >
-        <span>{value || 'Select preset...'}</span>
-        <span style={{ fontSize: '10px', opacity: 0.7 }}>▼</span>
+        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{value || 'Select preset...'}</span>
+        <span style={{ fontSize: '10px', opacity: 0.7, flexShrink: 0, marginLeft: '4px' }}>▼</span>
       </div>
       {isOpen && (
         <div className="preset-picker-dropdown">

@@ -43,6 +43,8 @@ const ASCIIGenerator = () => {
   const captureCallbackRef = useRef(null)
   const captureStartTimeRef = useRef(null)
   const captureDurationRef = useRef(null)
+  const ambientLightRef = useRef(null)
+  const directionalLightRef = useRef(null)
   
   
   const settingsRef = useRef({
@@ -61,7 +63,8 @@ const ASCIIGenerator = () => {
     motionSpeed: 1.0,
     rotationSpeedX: 0.0,
     rotationSpeedY: 0.01,
-    rotationSpeedZ: 0.0, 
+    rotationSpeedZ: 0.0,
+    lightingType: 'Soft', 
     
     
     tilesPerRow: 40,
@@ -82,7 +85,6 @@ const ASCIIGenerator = () => {
     maxGlyphScale: 1,
     waveTiles: false,
     invertGrayscale: true,
-    transparentBG: false,
     intensity: 1.5, 
     
     
@@ -91,15 +93,17 @@ const ASCIIGenerator = () => {
     edgeGlyph: '-',
     edgeColor: '#ff8847',
     edgeBG: '#000000',
+    edgeColorAlpha: 1.0,
+    edgeBGAlpha: 1.0,
     
     
     steps: [
-      { name: 'Black', glyph: '■', glyphColor: '#ff0000', bgColor: '#8b0000', minGray: 0, maxGray: 42 },
-      { name: 'Dark', glyph: '●', glyphColor: '#00ff00', bgColor: '#006400', minGray: 43, maxGray: 85 },
-      { name: 'Medium', glyph: '◆', glyphColor: '#0000ff', bgColor: '#00008b', minGray: 86, maxGray: 128 },
-      { name: 'Light', glyph: '▲', glyphColor: '#ffff00', bgColor: '#808000', minGray: 129, maxGray: 170 },
-      { name: 'Very Light', glyph: 'O', glyphColor: '#ff00ff', bgColor: '#800080', minGray: 171, maxGray: 213 },
-      { name: 'White', glyph: ' ', glyphColor: '#ffffff', bgColor: '#000000', minGray: 214, maxGray: 255 },
+      { name: 'Black', glyph: '■', glyphColor: '#ff0000', bgColor: '#8b0000', bgTransparent: false, minGray: 0, maxGray: 42 },
+      { name: 'Dark', glyph: '●', glyphColor: '#00ff00', bgColor: '#006400', bgTransparent: false, minGray: 43, maxGray: 85 },
+      { name: 'Medium', glyph: '◆', glyphColor: '#0000ff', bgColor: '#00008b', bgTransparent: false, minGray: 86, maxGray: 128 },
+      { name: 'Light', glyph: '▲', glyphColor: '#ffff00', bgColor: '#808000', bgTransparent: false, minGray: 129, maxGray: 170 },
+      { name: 'Very Light', glyph: 'O', glyphColor: '#ff00ff', bgColor: '#800080', bgTransparent: false, minGray: 171, maxGray: 213 },
+      { name: 'White', glyph: ' ', glyphColor: '#ffffff', bgColor: '#000000', bgTransparent: false, minGray: 214, maxGray: 255 },
     ],
     
     
@@ -173,6 +177,7 @@ const ASCIIGenerator = () => {
         rotationSpeedX: currentSettings.rotationSpeedX,
         rotationSpeedY: currentSettings.rotationSpeedY,
         rotationSpeedZ: currentSettings.rotationSpeedZ,
+        lightingType: currentSettings.lightingType,
         tilesPerRow: currentSettings.tilesPerRow,
         gridLines: currentSettings.gridLines,
         gridLineWidth: currentSettings.gridLineWidth,
@@ -187,7 +192,6 @@ const ASCIIGenerator = () => {
         maxGlyphScale: currentSettings.maxGlyphScale,
         waveTiles: currentSettings.waveTiles,
         invertGrayscale: currentSettings.invertGrayscale,
-        transparentBG: currentSettings.transparentBG,
         intensity: currentSettings.intensity,
         enableEdges: currentSettings.enableEdges,
         edgeThreshold: currentSettings.edgeThreshold,
@@ -199,6 +203,7 @@ const ASCIIGenerator = () => {
           glyph: step.glyph,
           glyphColor: step.glyphColor,
           bgColor: step.bgColor,
+          bgTransparent: step.bgTransparent !== undefined ? step.bgTransparent : false,
           minGray: step.minGray,
           maxGray: step.maxGray
         })),
@@ -221,7 +226,12 @@ const ASCIIGenerator = () => {
     imageDataCacheRef.current = null
     edgeMapCacheRef.current = null
     lastInputHashRef.current = ''
-    stepLookupRef.current = null 
+    stepLookupRef.current = null
+    
+    
+    if (currentSettings.enableEdges && currentSettings.inputMode !== 'Image') {
+      edgeMapCacheRef.current = null
+    } 
     
     
     
@@ -629,22 +639,37 @@ const ASCIIGenerator = () => {
   }
 
   
-  const parseColor = useCallback((colorStr) => {
-    if (colorCacheRef.current.has(colorStr)) {
-      return colorCacheRef.current.get(colorStr)
+  const parseColor = useCallback((colorStr, alpha = 1.0) => {
+    const cacheKey = `${colorStr}-${alpha}`
+    if (colorCacheRef.current.has(cacheKey)) {
+      return colorCacheRef.current.get(cacheKey)
     }
-    let r, g, b
+    let r, g, b, a = alpha
     if (colorStr.startsWith('#')) {
-      r = parseInt(colorStr.slice(1, 3), 16)
-      g = parseInt(colorStr.slice(3, 5), 16)
-      b = parseInt(colorStr.slice(5, 7), 16)
+      if (colorStr.length === 9) {
+
+        r = parseInt(colorStr.slice(1, 3), 16)
+        g = parseInt(colorStr.slice(3, 5), 16)
+        b = parseInt(colorStr.slice(5, 7), 16)
+        a = parseInt(colorStr.slice(7, 9), 16) / 255
+      } else {
+
+        r = parseInt(colorStr.slice(1, 3), 16)
+        g = parseInt(colorStr.slice(3, 5), 16)
+        b = parseInt(colorStr.slice(5, 7), 16)
+      }
     } else {
       r = g = b = 255
     }
-    const result = { r, g, b }
-    colorCacheRef.current.set(colorStr, result)
+    const result = { r, g, b, a }
+    colorCacheRef.current.set(cacheKey, result)
     return result
   }, [])
+  
+  const colorToRGBA = useCallback((colorStr, alpha = 1.0) => {
+    const parsed = parseColor(colorStr, alpha)
+    return `rgba(${parsed.r}, ${parsed.g}, ${parsed.b}, ${parsed.a})`
+  }, [parseColor])
 
   
   const buildStepLookup = useCallback((steps) => {
@@ -677,10 +702,13 @@ const ASCIIGenerator = () => {
     }
 
     
+    ctx._lastFont = null
     
-    if (currentSettings.transparentBG || (currentSettings.showInputCanvas && !currentSettings.transparentBG)) {
-      ctx.clearRect(0, 0, outputCanvas.width, outputCanvas.height)
-    } else {
+    ctx.clearRect(0, 0, outputCanvas.width, outputCanvas.height)
+    
+    const hasTransparentTiles = currentSettings.steps.some(step => step.bgTransparent === true)
+    
+    if (!currentSettings.showInputCanvas && !hasTransparentTiles) {
       ctx.fillStyle = '#000000'
       ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height)
     }
@@ -784,55 +812,66 @@ const ASCIIGenerator = () => {
     
     let edgeMap = null
     if (currentSettings.enableEdges) {
-      const edgeCacheKey = `${inputHash}-${currentSettings.edgeThreshold}`
       
-      
-      if (edgeMapCacheRef.current && currentSettings.inputMode === 'Image' && lastInputHashRef.current === inputHash) {
+      if (edgeMapCacheRef.current && lastInputHashRef.current === inputHash) {
         edgeMap = edgeMapCacheRef.current
       } else {
-        edgeMap = new Uint8Array(currentSettings.width * currentSettings.height)
+        
+        const downsampleFactor = 2
+        const edgeWidth = Math.floor(currentSettings.width / downsampleFactor)
+        const edgeHeight = Math.floor(currentSettings.height / downsampleFactor)
+        edgeMap = new Uint8Array(edgeWidth * edgeHeight)
         
         
+        const grayCache = new Uint8Array(edgeWidth * edgeHeight)
         
-        const grayCache = new Uint8Array(currentSettings.width * currentSettings.height)
-        for (let y = 0; y < currentSettings.height; y++) {
-          for (let x = 0; x < currentSettings.width; x++) {
+        for (let ey = 0; ey < edgeHeight; ey++) {
+          const y = ey * downsampleFactor
+          for (let ex = 0; ex < edgeWidth; ex++) {
+            const x = ex * downsampleFactor
             const idx = (y * currentSettings.width + x) * 4
             const r = imageData.data[idx]
             const g = imageData.data[idx + 1]
             const b = imageData.data[idx + 2]
-            grayCache[y * currentSettings.width + x] = (r * 0.299 + g * 0.587 + b * 0.114)
+            grayCache[ey * edgeWidth + ex] = (r * 0.299 + g * 0.587 + b * 0.114)
           }
         }
         
         
-        for (let y = 1; y < currentSettings.height - 1; y++) {
-          for (let x = 1; x < currentSettings.width - 1; x++) {
-            const getGray = (px, py) => grayCache[py * currentSettings.width + px]
+        for (let ey = 1; ey < edgeHeight - 1; ey++) {
+          for (let ex = 1; ex < edgeWidth - 1; ex++) {
+            const getGray = (px, py) => grayCache[py * edgeWidth + px]
             
             
             const gx = 
-              -1 * getGray(x - 1, y - 1) + 1 * getGray(x + 1, y - 1) +
-              -2 * getGray(x - 1, y)     + 2 * getGray(x + 1, y) +
-              -1 * getGray(x - 1, y + 1) + 1 * getGray(x + 1, y + 1)
+              -1 * getGray(ex - 1, ey - 1) + 1 * getGray(ex + 1, ey - 1) +
+              -2 * getGray(ex - 1, ey)     + 2 * getGray(ex + 1, ey) +
+              -1 * getGray(ex - 1, ey + 1) + 1 * getGray(ex + 1, ey + 1)
             
             const gy = 
-              -1 * getGray(x - 1, y - 1) - 2 * getGray(x, y - 1) - 1 * getGray(x + 1, y - 1) +
-               1 * getGray(x - 1, y + 1) + 2 * getGray(x, y + 1) + 1 * getGray(x + 1, y + 1)
+              -1 * getGray(ex - 1, ey - 1) - 2 * getGray(ex, ey - 1) - 1 * getGray(ex + 1, ey - 1) +
+               1 * getGray(ex - 1, ey + 1) + 2 * getGray(ex, ey + 1) + 1 * getGray(ex + 1, ey + 1)
             
             
             const magnitude = Math.sqrt(gx * gx + gy * gy)
-            edgeMap[y * currentSettings.width + x] = Math.min(255, magnitude)
+            edgeMap[ey * edgeWidth + ex] = Math.min(255, magnitude)
           }
         }
         
         
-        if (currentSettings.inputMode === 'Image') {
-          edgeMapCacheRef.current = edgeMap
-        }
+        edgeMapCacheRef.current = edgeMap
       }
     }
 
+    
+    const glyphAnimationEnabled = currentSettings.glyphAnimation
+    const motionSpeed = currentSettings.motionSpeed || 1.0
+    const animationSpeed = currentSettings.animationSpeed
+    const minGlyphScale = currentSettings.minGlyphScale
+    const maxGlyphScale = currentSettings.maxGlyphScale
+    const glyphScaleRange = maxGlyphScale - minGlyphScale
+    const waveTiles = currentSettings.waveTiles
+    const timeMultiplier = animationSpeed * 10 * motionSpeed
     
     for (let ty = 0; ty < tilesPerCol; ty++) {
       for (let tx = 0; tx < currentSettings.tilesPerRow; tx++) {
@@ -869,18 +908,26 @@ const ASCIIGenerator = () => {
         
         if (currentSettings.enableEdges && edgeMap) {
           
-          const sampleSize = Math.max(1, Math.floor(baseTileWidth / (4 * adaptiveSampleFactor)))
-          const maxSamples = Math.ceil(baseTileHeight / sampleSize) * Math.ceil(baseTileWidth / sampleSize)
-          let samplesChecked = 0
-          const maxSamplesToCheck = Math.min(maxSamples, 16) 
+          const downsampleFactor = 2
+          const edgeWidth = Math.floor(currentSettings.width / downsampleFactor)
+          const edgeHeight = Math.floor(currentSettings.height / downsampleFactor)
           
-          for (let sy = 0; sy < baseTileHeight && samplesChecked < maxSamplesToCheck; sy += sampleSize) {
-            for (let sx = 0; sx < baseTileWidth && samplesChecked < maxSamplesToCheck; sx += sampleSize) {
-              const px = Math.floor(tx * baseTileWidth + sx)
-              const py = Math.floor(ty * baseTileHeight + sy)
+          const tileEdgeX = Math.floor((tx * baseTileWidth) / downsampleFactor)
+          const tileEdgeY = Math.floor((ty * baseTileHeight) / downsampleFactor)
+          const tileEdgeWidth = Math.max(1, Math.ceil(baseTileWidth / downsampleFactor))
+          const tileEdgeHeight = Math.max(1, Math.ceil(baseTileHeight / downsampleFactor))
+          
+          const sampleSize = Math.max(1, Math.floor(tileEdgeWidth / 3))
+          const maxSamplesToCheck = 9
+          let samplesChecked = 0
+          
+          for (let sy = 0; sy < tileEdgeHeight && samplesChecked < maxSamplesToCheck; sy += sampleSize) {
+            for (let sx = 0; sx < tileEdgeWidth && samplesChecked < maxSamplesToCheck; sx += sampleSize) {
+              const ex = Math.min(tileEdgeX + sx, edgeWidth - 1)
+              const ey = Math.min(tileEdgeY + sy, edgeHeight - 1)
               
-              if (px < currentSettings.width && py < currentSettings.height) {
-                const edgeStrength = edgeMap[py * currentSettings.width + px]
+              if (ex >= 0 && ey >= 0 && ex < edgeWidth && ey < edgeHeight) {
+                const edgeStrength = edgeMap[ey * edgeWidth + ex]
                 if (edgeStrength > currentSettings.edgeThreshold) {
                   hasEdge = true
                   maxEdgeStrength = Math.max(maxEdgeStrength, edgeStrength)
@@ -942,8 +989,15 @@ const ASCIIGenerator = () => {
         
         if (hasEdge && currentSettings.enableEdges) {
           
-          ctx.fillStyle = currentSettings.edgeBG
-          ctx.fillRect(x, y, drawWidth, drawHeight)
+          const edgeBGAlpha = currentSettings.edgeBGAlpha !== undefined ? currentSettings.edgeBGAlpha : 1.0
+          if (edgeBGAlpha > 0) {
+            if (edgeBGAlpha < 1.0) {
+              ctx.fillStyle = colorToRGBA(currentSettings.edgeBG, edgeBGAlpha)
+            } else {
+              ctx.fillStyle = currentSettings.edgeBG
+            }
+            ctx.fillRect(x, y, drawWidth, drawHeight)
+          }
 
           
           if (currentSettings.gridLines > 0 && currentSettings.gridLineWidth > 0 && gridLineColorParsed) {
@@ -953,15 +1007,22 @@ const ASCIIGenerator = () => {
           }
 
           
-          ctx.fillStyle = currentSettings.edgeColor
-          ctx.font = `${drawHeight}px monospace`
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'middle'
-          ctx.fillText(
-            currentSettings.edgeGlyph,
-            x + drawWidth / 2,
-            y + drawHeight / 2
-          )
+          const edgeColorAlpha = currentSettings.edgeColorAlpha !== undefined ? currentSettings.edgeColorAlpha : 1.0
+          if (edgeColorAlpha > 0) {
+            if (edgeColorAlpha < 1.0) {
+              ctx.fillStyle = colorToRGBA(currentSettings.edgeColor, edgeColorAlpha)
+            } else {
+              ctx.fillStyle = currentSettings.edgeColor
+            }
+            ctx.font = `${drawHeight}px monospace`
+            ctx.textAlign = 'center'
+            ctx.textBaseline = 'middle'
+            ctx.fillText(
+              currentSettings.edgeGlyph,
+              x + drawWidth / 2,
+              y + drawHeight / 2
+            )
+          }
           continue
         }
 
@@ -972,32 +1033,37 @@ const ASCIIGenerator = () => {
 
         
         let glyphScale = 1
-        if (currentSettings.glyphAnimation) {
-          const motionSpeed = currentSettings.motionSpeed || 1.0
-          let wave = Math.sin(time * currentSettings.animationSpeed * 10 * motionSpeed + (tx + ty) * 0.1)
-          if (currentSettings.waveTiles) {
+        if (glyphAnimationEnabled) {
+          let wave = Math.sin(time * timeMultiplier + (tx + ty) * 0.1)
+          if (waveTiles) {
             
-            wave = Math.sin(time * currentSettings.animationSpeed * 10 * motionSpeed + (tx + ty) * 0.5) * 
-                   Math.cos(time * currentSettings.animationSpeed * 5 * motionSpeed + (tx - ty) * 0.3)
+            wave = Math.sin(time * timeMultiplier + (tx + ty) * 0.5) * 
+                   Math.cos(time * animationSpeed * 5 * motionSpeed + (tx - ty) * 0.3)
           }
-          glyphScale = currentSettings.minGlyphScale + (currentSettings.maxGlyphScale - currentSettings.minGlyphScale) * (wave + 1) / 2
+          glyphScale = minGlyphScale + glyphScaleRange * (wave + 1) * 0.5
+          
+          
+          glyphScale = Math.round(glyphScale * 10) / 10
         }
 
         
         
-        if (currentSettings.showInputCanvas && !currentSettings.transparentBG) {
-          
-          const bgColor = step.bgColor
-          if (bgColor.startsWith('#')) {
+        const bgTransparent = step.bgTransparent !== undefined ? step.bgTransparent : false
+        if (!bgTransparent) {
+          if (currentSettings.showInputCanvas) {
             
-            ctx.fillStyle = bgColor + 'CC' 
+            const bgColor = step.bgColor
+            if (bgColor.startsWith('#')) {
+              
+              ctx.fillStyle = bgColor + 'CC' 
+            } else {
+              ctx.fillStyle = bgColor
+            }
           } else {
-            ctx.fillStyle = bgColor
+            ctx.fillStyle = step.bgColor
           }
-        } else {
-          ctx.fillStyle = step.bgColor
+          ctx.fillRect(x, y, drawWidth, drawHeight)
         }
-        ctx.fillRect(x, y, drawWidth, drawHeight)
 
         
         if (currentSettings.gridLines > 0 && currentSettings.gridLineWidth > 0 && gridLineColorParsed) {
@@ -1007,18 +1073,28 @@ const ASCIIGenerator = () => {
         }
 
         
-        ctx.fillStyle = step.glyphColor
-        ctx.font = `${drawHeight * glyphScale}px monospace`
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        ctx.fillText(
-          step.glyph,
-          x + drawWidth / 2,
-          y + drawHeight / 2
-        )
+        if (!bgTransparent) {
+          ctx.fillStyle = step.glyphColor
+          
+          const fontSize = drawHeight * glyphScale
+          const fontString = `${fontSize}px monospace`
+          
+          if (ctx._lastFont !== fontString) {
+            ctx.font = fontString
+            ctx._lastFont = fontString
+          }
+          
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(
+            step.glyph,
+            x + drawWidth / 2,
+            y + drawHeight / 2
+          )
+        }
       }
     }
-  }, [])
+  }, [colorToRGBA])
 
   useEffect(() => {
     if (!containerRef.current || !canvas3DRef.current) return
@@ -1067,12 +1143,44 @@ const ASCIIGenerator = () => {
     
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.5)
     scene.add(ambientLight)
+    ambientLightRef.current = ambientLight
     
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8)
     directionalLight.position.set(5, 5, 5)
     scene.add(directionalLight)
+    directionalLightRef.current = directionalLight
     
     meshRef.current = mesh
+    
+    const updateLighting = () => {
+      if (!ambientLightRef.current || !directionalLightRef.current) return
+      
+      const lightingType = currentSettings.lightingType || 'Soft'
+      
+      switch (lightingType) {
+        case 'Soft':
+          ambientLightRef.current.intensity = 0.7
+          directionalLightRef.current.intensity = 0.5
+          directionalLightRef.current.position.set(4, 4, 4)
+          break
+        case 'Strong':
+          ambientLightRef.current.intensity = 0.3
+          directionalLightRef.current.intensity = 1.2
+          directionalLightRef.current.position.set(6, 6, 6)
+          break
+        case 'Contrast':
+          ambientLightRef.current.intensity = 0.2
+          directionalLightRef.current.intensity = 1.5
+          directionalLightRef.current.position.set(8, 3, 8)
+          break
+        default:
+          ambientLightRef.current.intensity = 0.5
+          directionalLightRef.current.intensity = 0.8
+          directionalLightRef.current.position.set(5, 5, 5)
+      }
+    }
+    
+    updateLighting()
 
     
     const gui = new GUI({ container: containerRef.current })
@@ -1139,7 +1247,7 @@ const ASCIIGenerator = () => {
     })
     inputFolder.add(currentSettings, 'motionMode', ['Motion', 'Static']).onChange(updateSettings)
     inputFolder.add(currentSettings, 'zoom', 0.1, 5).onChange(updateSettings)
-    inputFolder.add(currentSettings, 'motionSpeed', 0, 5).name('Animation Speed').onChange(updateSettings)
+    inputFolder.add(currentSettings, 'motionSpeed', 0, 5).name('Global Animation Speed').onChange(updateSettings)
     
     
     const rotationFolder = inputFolder.addFolder('Rotation Control')
@@ -1156,6 +1264,39 @@ const ASCIIGenerator = () => {
       }
     }}
     rotationFolder.add(resetRotationBtn, 'reset').name('Reset Rotation')
+    
+    const lightingFolder = inputFolder.addFolder('Lighting')
+    lightingFolder.add(currentSettings, 'lightingType', ['Soft', 'Strong', 'Contrast']).name('Lighting Type').onChange(() => {
+      const updateLighting = () => {
+        if (!ambientLightRef.current || !directionalLightRef.current) return
+        
+        const lightingType = currentSettings.lightingType || 'Soft'
+        
+        switch (lightingType) {
+          case 'Soft':
+            ambientLightRef.current.intensity = 0.7
+            directionalLightRef.current.intensity = 0.5
+            directionalLightRef.current.position.set(4, 4, 4)
+            break
+          case 'Strong':
+            ambientLightRef.current.intensity = 0.3
+            directionalLightRef.current.intensity = 1.2
+            directionalLightRef.current.position.set(6, 6, 6)
+            break
+          case 'Contrast':
+            ambientLightRef.current.intensity = 0.2
+            directionalLightRef.current.intensity = 1.5
+            directionalLightRef.current.position.set(8, 3, 8)
+            break
+          default:
+            ambientLightRef.current.intensity = 0.5
+            directionalLightRef.current.intensity = 0.8
+            directionalLightRef.current.position.set(5, 5, 5)
+        }
+      }
+      updateLighting()
+      updateSettings()
+    })
     
     const uploadObjBtn = { upload: () => {
       const input = document.createElement('input')
@@ -1414,15 +1555,6 @@ const ASCIIGenerator = () => {
       }, 'image/png')
     }}
     controlsFolder.add(downloadBtn, 'download').name('💾 Download')
-    
-    
-    const resetSettingsBtn = { reset: () => {
-      if (confirm('Reset all saved settings to defaults? This will clear your saved configuration.')) {
-        localStorage.removeItem('asciiGeneratorSettings')
-        location.reload() 
-      }
-    }}
-    controlsFolder.add(resetSettingsBtn, 'reset').name('🔄 Reset Saved Settings')
     
      
     const videoExportSettings = {
@@ -2043,36 +2175,37 @@ const ASCIIGenerator = () => {
 
     
     const outputFolder = gui.addFolder('3. Output - ASCII')
-    outputFolder.add(currentSettings, 'tilesPerRow', 10, 200).onChange(updateSettings)
-    outputFolder.add(currentSettings, 'gridLines', 0, 1).onChange(updateSettings)
-    outputFolder.add(currentSettings, 'gridLineWidth', 0, 10).name('Grid Line Width').onChange(updateSettings)
-    outputFolder.addColor(currentSettings, 'gridLineColor').name('Grid Line Color').onChange(updateSettings)
-
     
+    const imageProcessingFolder = outputFolder.addFolder('Image Processing')
+    imageProcessingFolder.add(currentSettings, 'invertGrayscale').name('Invert Grayscale').onChange(updateSettings)
+    imageProcessingFolder.add(currentSettings, 'intensity', 0, 2).name('Contrast Intensity').onChange(updateSettings)
+    
+    const gridFolder = outputFolder.addFolder('Grid Settings')
+    gridFolder.add(currentSettings, 'tilesPerRow', 10, 200).name('Tiles Per Row').onChange(updateSettings)
+    gridFolder.add(currentSettings, 'gridLines', 0, 1).name('Grid Lines Opacity').onChange(updateSettings)
+    gridFolder.add(currentSettings, 'gridLineWidth', 0, 10).name('Grid Line Width').onChange(updateSettings)
+    gridFolder.addColor(currentSettings, 'gridLineColor').name('Grid Line Color').onChange(updateSettings)
+
     const gridAnimFolder = outputFolder.addFolder('Grid Size Animation')
-    gridAnimFolder.add(currentSettings, 'gridSizeAnimation').onChange(updateSettings)
-    gridAnimFolder.add(currentSettings, 'minSize', 5, 100).onChange(updateSettings)
-    gridAnimFolder.add(currentSettings, 'maxSize', 5, 100).onChange(updateSettings)
-    gridAnimFolder.add(currentSettings, 'speed', 0, 1).onChange(updateSettings)
+    gridAnimFolder.add(currentSettings, 'gridSizeAnimation').name('Enable').onChange(updateSettings)
+    gridAnimFolder.add(currentSettings, 'minSize', 5, 100).name('Min Size').onChange(updateSettings)
+    gridAnimFolder.add(currentSettings, 'maxSize', 5, 100).name('Max Size').onChange(updateSettings)
+    gridAnimFolder.add(currentSettings, 'speed', 0, 1).name('Animation Speed').onChange(updateSettings)
+
+    const glyphAnimFolder = outputFolder.addFolder('Glyph Animation')
+    glyphAnimFolder.add(currentSettings, 'glyphAnimation').name('Enable').onChange(updateSettings)
+    glyphAnimFolder.add(currentSettings, 'animationSpeed', 0, 1).name('Animation Speed').onChange(updateSettings)
+    glyphAnimFolder.add(currentSettings, 'minGlyphScale', 0, 2).name('Min Scale').onChange(updateSettings)
+    glyphAnimFolder.add(currentSettings, 'maxGlyphScale', 0, 1).name('Max Scale').onChange(updateSettings)
+    glyphAnimFolder.add(currentSettings, 'waveTiles').name('Wave Pattern').onChange(updateSettings)
 
     
-    const glyphAnimFolder = outputFolder.addFolder('Glyph Wave Animation')
-    glyphAnimFolder.add(currentSettings, 'glyphAnimation').onChange(updateSettings)
-    glyphAnimFolder.add(currentSettings, 'animationSpeed', 0, 1).onChange(updateSettings)
-    glyphAnimFolder.add(currentSettings, 'minGlyphScale', 0, 2).onChange(updateSettings)
-    glyphAnimFolder.add(currentSettings, 'maxGlyphScale', 0, 1).onChange(updateSettings)
-    glyphAnimFolder.add(currentSettings, 'waveTiles').onChange(updateSettings)
-    glyphAnimFolder.add(currentSettings, 'invertGrayscale').onChange(updateSettings)
-    glyphAnimFolder.add(currentSettings, 'transparentBG').onChange(updateSettings)
-    glyphAnimFolder.add(currentSettings, 'intensity', 0, 2).name('Intensity').onChange(updateSettings)
-
-    
-    const edgeFolder = outputFolder.addFolder('Edge Settings')
-    edgeFolder.add(currentSettings, 'enableEdges').onChange(updateSettings)
-    edgeFolder.add(currentSettings, 'edgeThreshold', 0, 255).onChange(updateSettings)
+    const edgeFolder = outputFolder.addFolder('Edge Detection')
+    edgeFolder.add(currentSettings, 'enableEdges').name('Enable').onChange(updateSettings)
+    edgeFolder.add(currentSettings, 'edgeThreshold', 0, 255).name('Threshold').onChange(updateSettings)
     
     
-    const edgeGlyphController = edgeFolder.add(currentSettings, 'edgeGlyph').onChange(updateSettings)
+    const edgeGlyphController = edgeFolder.add(currentSettings, 'edgeGlyph').name('Glyph').onChange(updateSettings)
     setTimeout(() => {
       const inputWrapper = edgeGlyphController.$input?.parentElement
       if (inputWrapper && !inputWrapper.querySelector('.glyph-picker-wrapper')) {
@@ -2137,8 +2270,16 @@ const ASCIIGenerator = () => {
       }
     }, 200)
     
-    edgeFolder.addColor(currentSettings, 'edgeColor').onChange(updateSettings)
-    edgeFolder.addColor(currentSettings, 'edgeBG').onChange(updateSettings)
+    edgeFolder.addColor(currentSettings, 'edgeColor').name('Color').onChange(updateSettings)
+    edgeFolder.addColor(currentSettings, 'edgeBG').name('Background Color').onChange(updateSettings)
+    if (currentSettings.edgeColorAlpha === undefined) {
+      currentSettings.edgeColorAlpha = 1.0
+    }
+    if (currentSettings.edgeBGAlpha === undefined) {
+      currentSettings.edgeBGAlpha = 1.0
+    }
+    edgeFolder.add(currentSettings, 'edgeColorAlpha', 0, 1).name('Color Alpha').onChange(updateSettings)
+    edgeFolder.add(currentSettings, 'edgeBGAlpha', 0, 1).name('Background Alpha').onChange(updateSettings)
 
     
     const presetFolder = outputFolder.addFolder('Presets')
@@ -2151,6 +2292,7 @@ const ASCIIGenerator = () => {
           step.glyph = preset.steps[index].glyph
           step.glyphColor = preset.steps[index].glyphColor
           step.bgColor = preset.steps[index].bgColor
+          if (step.bgTransparent === undefined) step.bgTransparent = false
           
           
           const controllers = stepControllersRef.current[index]
@@ -2158,6 +2300,9 @@ const ASCIIGenerator = () => {
             controllers.glyphController?.updateDisplay()
             controllers.glyphColorController?.updateDisplay()
             controllers.bgColorController?.updateDisplay()
+            if (controllers.bgTransparentController) {
+              controllers.bgTransparentController.updateDisplay()
+            }
             if (controllers.glyphController?._pickerUpdate) {
               controllers.glyphController._pickerUpdate()
             }
@@ -2290,6 +2435,12 @@ const ASCIIGenerator = () => {
       
       const glyphColorController = stepFolder.addColor(step, 'glyphColor').onChange(() => updateSettings())
       const bgColorController = stepFolder.addColor(step, 'bgColor').onChange(() => updateSettings())
+      
+      if (step.bgTransparent === undefined) {
+        step.bgTransparent = false
+      }
+      
+      const bgTransparentController = stepFolder.add(step, 'bgTransparent').name('Transparent Background').onChange(() => updateSettings())
       stepFolder.add(step, 'minGray', 0, 255).onChange(() => updateSettings())
       stepFolder.add(step, 'maxGray', 0, 255).onChange(() => updateSettings())
       
@@ -2300,6 +2451,7 @@ const ASCIIGenerator = () => {
       stepControllersRef.current[index].glyphController = glyphController
       stepControllersRef.current[index].glyphColorController = glyphColorController
       stepControllersRef.current[index].bgColorController = bgColorController
+      stepControllersRef.current[index].bgTransparentController = bgTransparentController
       
       const randomizeBtn = { randomize: () => {
         const glyphs = currentSettings.glyphCollection
@@ -2323,6 +2475,135 @@ const ASCIIGenerator = () => {
       }}
       stepFolder.add(randomizeBtn, 'randomize').name('Randomize')
     })
+
+    
+    const getDefaultSettings = () => ({
+      framerate: 24,
+      preset: 'Insta Post - 4:5 (1080x1350)',
+      width: 1080,
+      height: 1350,
+      showInputCanvas: false,
+      inputMode: '3D Model',
+      sourceObject: 'torus',
+      motionMode: 'Motion',
+      zoom: 1.0,
+      motionSpeed: 1.0,
+      rotationSpeedX: 0.0,
+      rotationSpeedY: 0.01,
+      rotationSpeedZ: 0.0,
+      lightingType: 'Soft',
+      tilesPerRow: 40,
+      gridLines: 0,
+      gridLineWidth: 0,
+      gridLineColor: '#ffffff',
+      gridSizeAnimation: false,
+      minSize: 22,
+      maxSize: 35,
+      speed: 0,
+      glyphAnimation: true,
+      animationSpeed: 3.0,
+      minGlyphScale: 0,
+      maxGlyphScale: 1,
+      waveTiles: false,
+      invertGrayscale: true,
+      intensity: 1.5,
+      enableEdges: false,
+      edgeThreshold: 118,
+      edgeGlyph: '-',
+      edgeColor: '#ff8847',
+      edgeBG: '#000000',
+      edgeColorAlpha: 1.0,
+      edgeBGAlpha: 1.0,
+      steps: [
+        { name: 'Black', glyph: '■', glyphColor: '#ff0000', bgColor: '#8b0000', bgTransparent: false, minGray: 0, maxGray: 42 },
+        { name: 'Dark', glyph: '●', glyphColor: '#00ff00', bgColor: '#006400', bgTransparent: false, minGray: 43, maxGray: 85 },
+        { name: 'Medium', glyph: '◆', glyphColor: '#0000ff', bgColor: '#00008b', bgTransparent: false, minGray: 86, maxGray: 128 },
+        { name: 'Light', glyph: '▲', glyphColor: '#ffff00', bgColor: '#808000', bgTransparent: false, minGray: 129, maxGray: 170 },
+        { name: 'Very Light', glyph: 'O', glyphColor: '#ff00ff', bgColor: '#800080', bgTransparent: false, minGray: 171, maxGray: 213 },
+        { name: 'White', glyph: ' ', glyphColor: '#ffffff', bgColor: '#000000', bgTransparent: false, minGray: 214, maxGray: 255 },
+      ],
+      glyphCollection: currentSettings.glyphCollection,
+      selectedGlyphForStep: null
+    })
+    
+    const resetToDefaultsBtn = { reset: () => {
+      if (confirm('Reset all settings to defaults? This will restore all values to their initial state.')) {
+        const defaults = getDefaultSettings()
+        
+        Object.assign(currentSettings, defaults)
+        
+        if (meshRef.current && !hasCustomObjRef.current) {
+          const geometry = modelPresets[currentSettings.sourceObject]()
+          if (meshRef.current.geometry) {
+            meshRef.current.geometry.dispose()
+          }
+          meshRef.current.geometry = geometry
+          meshRef.current.rotation.x = 0
+          meshRef.current.rotation.y = 0
+          meshRef.current.rotation.z = 0
+        }
+        
+        if (ambientLightRef.current && directionalLightRef.current) {
+          const updateLighting = () => {
+            const lightingType = currentSettings.lightingType || 'Soft'
+            switch (lightingType) {
+              case 'Soft':
+                ambientLightRef.current.intensity = 0.7
+                directionalLightRef.current.intensity = 0.5
+                directionalLightRef.current.position.set(4, 4, 4)
+                break
+              case 'Strong':
+                ambientLightRef.current.intensity = 0.3
+                directionalLightRef.current.intensity = 1.2
+                directionalLightRef.current.position.set(6, 6, 6)
+                break
+              case 'Contrast':
+                ambientLightRef.current.intensity = 0.2
+                directionalLightRef.current.intensity = 1.5
+                directionalLightRef.current.position.set(8, 3, 8)
+                break
+              default:
+                ambientLightRef.current.intensity = 0.5
+                directionalLightRef.current.intensity = 0.8
+                directionalLightRef.current.position.set(5, 5, 5)
+            }
+          }
+          updateLighting()
+        }
+        
+        setSettings({ ...currentSettings })
+        updateSettings()
+        
+        setTimeout(() => {
+          gui.updateDisplay()
+          
+          if (rotationSpeedXController) rotationSpeedXController.updateDisplay()
+          if (rotationSpeedYController) rotationSpeedYController.updateDisplay()
+          if (rotationSpeedZController) rotationSpeedZController.updateDisplay()
+          
+          if (edgeGlyphController) {
+            edgeGlyphController.updateDisplay()
+            if (edgeGlyphController._pickerUpdate) {
+              edgeGlyphController._pickerUpdate()
+            }
+          }
+          
+          currentSettings.steps.forEach((step, index) => {
+            const controllers = stepControllersRef.current[index]
+            if (controllers) {
+              controllers.glyphController?.updateDisplay()
+              controllers.glyphColorController?.updateDisplay()
+              controllers.bgColorController?.updateDisplay()
+              controllers.bgTransparentController?.updateDisplay()
+              if (controllers.glyphController?._pickerUpdate) {
+                controllers.glyphController._pickerUpdate()
+              }
+            }
+          })
+        }, 100)
+      }
+    }}
+    controlsFolder.add(resetToDefaultsBtn, 'reset').name('🔄 Reset to Defaults')
 
     
     let time = 0

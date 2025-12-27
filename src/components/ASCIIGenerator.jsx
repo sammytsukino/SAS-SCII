@@ -98,12 +98,12 @@ const ASCIIGenerator = () => {
     
     
     steps: [
-      { name: 'Black', glyph: '■', glyphColor: '#ff0000', bgColor: '#8b0000', bgTransparent: false, minGray: 0, maxGray: 42 },
-      { name: 'Dark', glyph: '●', glyphColor: '#00ff00', bgColor: '#006400', bgTransparent: false, minGray: 43, maxGray: 85 },
-      { name: 'Medium', glyph: '◆', glyphColor: '#0000ff', bgColor: '#00008b', bgTransparent: false, minGray: 86, maxGray: 128 },
-      { name: 'Light', glyph: '▲', glyphColor: '#ffff00', bgColor: '#808000', bgTransparent: false, minGray: 129, maxGray: 170 },
-      { name: 'Very Light', glyph: 'O', glyphColor: '#ff00ff', bgColor: '#800080', bgTransparent: false, minGray: 171, maxGray: 213 },
-      { name: 'White', glyph: ' ', glyphColor: '#ffffff', bgColor: '#000000', bgTransparent: false, minGray: 214, maxGray: 255 },
+      { name: 'Black', glyph: '■', glyphColor: '#ff0000', bgColor: '#8b0000', bgTransparent: false, glyphTransparent: false, minGray: 0, maxGray: 42 },
+      { name: 'Dark', glyph: '●', glyphColor: '#00ff00', bgColor: '#006400', bgTransparent: false, glyphTransparent: false, minGray: 43, maxGray: 85 },
+      { name: 'Medium', glyph: '◆', glyphColor: '#0000ff', bgColor: '#00008b', bgTransparent: false, glyphTransparent: false, minGray: 86, maxGray: 128 },
+      { name: 'Light', glyph: '▲', glyphColor: '#ffff00', bgColor: '#808000', bgTransparent: false, glyphTransparent: false, minGray: 129, maxGray: 170 },
+      { name: 'Very Light', glyph: 'O', glyphColor: '#ff00ff', bgColor: '#800080', bgTransparent: false, glyphTransparent: false, minGray: 171, maxGray: 213 },
+      { name: 'White', glyph: ' ', glyphColor: '#ffffff', bgColor: '#000000', bgTransparent: false, glyphTransparent: false, minGray: 214, maxGray: 255 },
     ],
     
     
@@ -204,6 +204,7 @@ const ASCIIGenerator = () => {
           glyphColor: step.glyphColor,
           bgColor: step.bgColor,
           bgTransparent: step.bgTransparent !== undefined ? step.bgTransparent : false,
+          glyphTransparent: step.glyphTransparent !== undefined ? step.glyphTransparent : false,
           minGray: step.minGray,
           maxGray: step.maxGray
         })),
@@ -709,8 +710,37 @@ const ASCIIGenerator = () => {
     const hasTransparentTiles = currentSettings.steps.some(step => step.bgTransparent === true)
     
     if (!currentSettings.showInputCanvas && !hasTransparentTiles) {
-      ctx.fillStyle = '#000000'
-      ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height)
+      const bgType = currentSettings.backgroundType || 'solid'
+      
+      if (bgType === 'transparent') {
+        ctx.clearRect(0, 0, outputCanvas.width, outputCanvas.height)
+      } else if (bgType === 'solid') {
+        ctx.fillStyle = currentSettings.backgroundColor || '#000000'
+        ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height)
+      } else if (bgType === 'gradient') {
+        const gradient = currentSettings.gradientDirection === 'horizontal'
+          ? ctx.createLinearGradient(0, 0, outputCanvas.width, 0)
+          : currentSettings.gradientDirection === 'diagonal'
+          ? ctx.createLinearGradient(0, 0, outputCanvas.width, outputCanvas.height)
+          : ctx.createLinearGradient(0, 0, 0, outputCanvas.height)
+        
+        gradient.addColorStop(0, currentSettings.gradientColor1 || '#000000')
+        gradient.addColorStop(1, currentSettings.gradientColor2 || '#ffffff')
+        
+        ctx.fillStyle = gradient
+        ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height)
+      } else if (bgType === 'image' && backgroundImageRef.current) {
+        try {
+          ctx.drawImage(backgroundImageRef.current, 0, 0, outputCanvas.width, outputCanvas.height)
+        } catch (error) {
+          console.warn('Error drawing background image:', error)
+          ctx.fillStyle = '#000000'
+          ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height)
+        }
+      } else {
+        ctx.fillStyle = '#000000'
+        ctx.fillRect(0, 0, outputCanvas.width, outputCanvas.height)
+      }
     }
 
     
@@ -1049,6 +1079,8 @@ const ASCIIGenerator = () => {
         
         
         const bgTransparent = step.bgTransparent !== undefined ? step.bgTransparent : false
+        const glyphTransparent = step.glyphTransparent !== undefined ? step.glyphTransparent : false
+        
         if (!bgTransparent) {
           if (currentSettings.showInputCanvas) {
             
@@ -1073,7 +1105,7 @@ const ASCIIGenerator = () => {
         }
 
         
-        if (!bgTransparent) {
+        if (!glyphTransparent) {
           ctx.fillStyle = step.glyphColor
           
           const fontSize = drawHeight * glyphScale
@@ -2293,6 +2325,7 @@ const ASCIIGenerator = () => {
           step.glyphColor = preset.steps[index].glyphColor
           step.bgColor = preset.steps[index].bgColor
           if (step.bgTransparent === undefined) step.bgTransparent = false
+          if (step.glyphTransparent === undefined) step.glyphTransparent = false
           
           
           const controllers = stepControllersRef.current[index]
@@ -2302,6 +2335,9 @@ const ASCIIGenerator = () => {
             controllers.bgColorController?.updateDisplay()
             if (controllers.bgTransparentController) {
               controllers.bgTransparentController.updateDisplay()
+            }
+            if (controllers.glyphTransparentController) {
+              controllers.glyphTransparentController.updateDisplay()
             }
             if (controllers.glyphController?._pickerUpdate) {
               controllers.glyphController._pickerUpdate()
@@ -2439,8 +2475,12 @@ const ASCIIGenerator = () => {
       if (step.bgTransparent === undefined) {
         step.bgTransparent = false
       }
+      if (step.glyphTransparent === undefined) {
+        step.glyphTransparent = false
+      }
       
       const bgTransparentController = stepFolder.add(step, 'bgTransparent').name('Transparent Background').onChange(() => updateSettings())
+      const glyphTransparentController = stepFolder.add(step, 'glyphTransparent').name('Transparent Glyph').onChange(() => updateSettings())
       stepFolder.add(step, 'minGray', 0, 255).onChange(() => updateSettings())
       stepFolder.add(step, 'maxGray', 0, 255).onChange(() => updateSettings())
       
@@ -2452,6 +2492,7 @@ const ASCIIGenerator = () => {
       stepControllersRef.current[index].glyphColorController = glyphColorController
       stepControllersRef.current[index].bgColorController = bgColorController
       stepControllersRef.current[index].bgTransparentController = bgTransparentController
+      stepControllersRef.current[index].glyphTransparentController = glyphTransparentController
       
       const randomizeBtn = { randomize: () => {
         const glyphs = currentSettings.glyphCollection
@@ -2515,12 +2556,12 @@ const ASCIIGenerator = () => {
       edgeColorAlpha: 1.0,
       edgeBGAlpha: 1.0,
       steps: [
-        { name: 'Black', glyph: '■', glyphColor: '#ff0000', bgColor: '#8b0000', bgTransparent: false, minGray: 0, maxGray: 42 },
-        { name: 'Dark', glyph: '●', glyphColor: '#00ff00', bgColor: '#006400', bgTransparent: false, minGray: 43, maxGray: 85 },
-        { name: 'Medium', glyph: '◆', glyphColor: '#0000ff', bgColor: '#00008b', bgTransparent: false, minGray: 86, maxGray: 128 },
-        { name: 'Light', glyph: '▲', glyphColor: '#ffff00', bgColor: '#808000', bgTransparent: false, minGray: 129, maxGray: 170 },
-        { name: 'Very Light', glyph: 'O', glyphColor: '#ff00ff', bgColor: '#800080', bgTransparent: false, minGray: 171, maxGray: 213 },
-        { name: 'White', glyph: ' ', glyphColor: '#ffffff', bgColor: '#000000', bgTransparent: false, minGray: 214, maxGray: 255 },
+        { name: 'Black', glyph: '■', glyphColor: '#ff0000', bgColor: '#8b0000', bgTransparent: false, glyphTransparent: false, minGray: 0, maxGray: 42 },
+        { name: 'Dark', glyph: '●', glyphColor: '#00ff00', bgColor: '#006400', bgTransparent: false, glyphTransparent: false, minGray: 43, maxGray: 85 },
+        { name: 'Medium', glyph: '◆', glyphColor: '#0000ff', bgColor: '#00008b', bgTransparent: false, glyphTransparent: false, minGray: 86, maxGray: 128 },
+        { name: 'Light', glyph: '▲', glyphColor: '#ffff00', bgColor: '#808000', bgTransparent: false, glyphTransparent: false, minGray: 129, maxGray: 170 },
+        { name: 'Very Light', glyph: 'O', glyphColor: '#ff00ff', bgColor: '#800080', bgTransparent: false, glyphTransparent: false, minGray: 171, maxGray: 213 },
+        { name: 'White', glyph: ' ', glyphColor: '#ffffff', bgColor: '#000000', bgTransparent: false, glyphTransparent: false, minGray: 214, maxGray: 255 },
       ],
       glyphCollection: currentSettings.glyphCollection,
       selectedGlyphForStep: null
@@ -2595,6 +2636,7 @@ const ASCIIGenerator = () => {
               controllers.glyphColorController?.updateDisplay()
               controllers.bgColorController?.updateDisplay()
               controllers.bgTransparentController?.updateDisplay()
+              controllers.glyphTransparentController?.updateDisplay()
               if (controllers.glyphController?._pickerUpdate) {
                 controllers.glyphController._pickerUpdate()
               }

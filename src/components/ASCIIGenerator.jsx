@@ -64,6 +64,8 @@ const ASCIIGenerator = () => {
     rotationSpeedX: 0.0,
     rotationSpeedY: 0.01,
     rotationSpeedZ: 0.0,
+    positionX: 0.0,
+    positionY: 0.0,
     lightingType: 'Soft', 
     
     
@@ -1170,6 +1172,9 @@ const ASCIIGenerator = () => {
     mesh.rotation.x = 0
     mesh.rotation.y = 0
     mesh.rotation.z = 0
+    mesh.position.x = 0
+    mesh.position.y = 0
+    mesh.position.z = 0
     scene.add(mesh)
     
     
@@ -1296,6 +1301,22 @@ const ASCIIGenerator = () => {
       }
     }}
     rotationFolder.add(resetRotationBtn, 'reset').name('Reset Rotation')
+    
+    const positionFolder = inputFolder.addFolder('Position Control')
+    const positionXController = positionFolder.add(currentSettings, 'positionX', -2, 2).name('Position X').onChange(updateSettings)
+    const positionYController = positionFolder.add(currentSettings, 'positionY', -2, 2).name('Position Y').onChange(updateSettings)
+    
+    
+    const resetPositionBtn = { reset: () => {
+      if (meshRef.current) {
+        currentSettings.positionX = 0.0
+        currentSettings.positionY = 0.0
+        if (positionXController) positionXController.updateDisplay()
+        if (positionYController) positionYController.updateDisplay()
+        updateSettings()
+      }
+    }}
+    positionFolder.add(resetPositionBtn, 'reset').name('Reset Position')
     
     const lightingFolder = inputFolder.addFolder('Lighting')
     lightingFolder.add(currentSettings, 'lightingType', ['Soft', 'Strong', 'Contrast']).name('Lighting Type').onChange(() => {
@@ -1469,6 +1490,12 @@ const ASCIIGenerator = () => {
                 if (rotationSpeedXController) rotationSpeedXController.updateDisplay()
                 if (rotationSpeedYController) rotationSpeedYController.updateDisplay()
                 if (rotationSpeedZController) rotationSpeedZController.updateDisplay()
+                
+                
+                currentSettings.positionX = 0.0
+                currentSettings.positionY = 0.0
+                if (positionXController) positionXController.updateDisplay()
+                if (positionYController) positionYController.updateDisplay()
                 
                 
                 if (meshRef.current.material) {
@@ -2532,6 +2559,8 @@ const ASCIIGenerator = () => {
       rotationSpeedX: 0.0,
       rotationSpeedY: 0.01,
       rotationSpeedZ: 0.0,
+      positionX: 0.0,
+      positionY: 0.0,
       lightingType: 'Soft',
       tilesPerRow: 40,
       gridLines: 0,
@@ -2622,6 +2651,9 @@ const ASCIIGenerator = () => {
           if (rotationSpeedYController) rotationSpeedYController.updateDisplay()
           if (rotationSpeedZController) rotationSpeedZController.updateDisplay()
           
+          if (positionXController) positionXController.updateDisplay()
+          if (positionYController) positionYController.updateDisplay()
+          
           if (edgeGlyphController) {
             edgeGlyphController.updateDisplay()
             if (edgeGlyphController._pickerUpdate) {
@@ -2680,6 +2712,14 @@ const ASCIIGenerator = () => {
         meshRef.current.rotation.x += rotX * speed
         meshRef.current.rotation.y += rotY * speed
         meshRef.current.rotation.z += rotZ * speed
+      }
+      
+      
+      if (currentSettings.inputMode === '3D Model' && meshRef.current) {
+        const posX = currentSettings.positionX !== undefined ? currentSettings.positionX : 0.0
+        const posY = currentSettings.positionY !== undefined ? currentSettings.positionY : 0.0
+        meshRef.current.position.x = posX
+        meshRef.current.position.y = posY
       }
 
       

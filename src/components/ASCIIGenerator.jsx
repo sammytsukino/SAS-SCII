@@ -1583,7 +1583,7 @@ const ASCIIGenerator = () => {
     const controlsFolder = gui.addFolder('Controls')
     const pauseResumeBtn = { toggle: () => {
       isPausedRef.current = !isPausedRef.current
-      pauseResumeController.name(isPausedRef.current ? '▶ Resume' : '⏸ Pause')
+      pauseResumeController.name(isPausedRef.current ? '▶ Resume' : '❚❚ Pause')
       pauseResumeController.updateDisplay()
       
       if (videoRef.current) {
@@ -1613,7 +1613,7 @@ const ASCIIGenerator = () => {
         URL.revokeObjectURL(url)
       }, 'image/png')
     }}
-    controlsFolder.add(downloadBtn, 'download').name('💾 Download')
+    controlsFolder.add(downloadBtn, 'download').name('↓ Download frame')
     
      
     const videoExportSettings = {
@@ -1796,7 +1796,7 @@ const ASCIIGenerator = () => {
           console.warn('Error cleaning up FFmpeg files:', e)
         }
         
-        updateProgress(`✅ Video generated successfully!`)
+        updateProgress(`✓ Video generated successfully!`)
         setTimeout(() => {
           if (document.body.contains(progressMsg)) {
             document.body.removeChild(progressMsg)
@@ -1973,7 +1973,7 @@ const ASCIIGenerator = () => {
         `Start ZIP frame capture?\n\n` +
         `Duration: ${duration} seconds\n` +
         `All frames rendered during ${duration} seconds will be captured.\n\n` +
-        `A ZIP file will be created with all frames.`
+        `A ZIP file will be created with all frames. Hit pause button to download frames when the count reaches the amount of frames you want to capture.`
       )
       
       if (!confirmed) return
@@ -2018,7 +2018,7 @@ const ASCIIGenerator = () => {
               blob: blob
             })
             frameCount++
-            updateProgress(`Capturing frames... ${frameCount} frames (${elapsed.toFixed(1)}s / ${duration}s)`)
+            updateProgress(`Capturing frames... ${frameCount} frames (${elapsed.toFixed(1)}s / ${duration}s). Hit pause button to download frames.`)
           }
         }
         
@@ -2059,7 +2059,7 @@ const ASCIIGenerator = () => {
         document.body.removeChild(link)
         URL.revokeObjectURL(url)
         
-        updateProgress(`✅ ZIP created with ${frameCount} frames!`)
+        updateProgress(`✓ ZIP created with ${frameCount} frames!`)
         setTimeout(() => {
           if (document.body.contains(progressMsg)) {
             document.body.removeChild(progressMsg)
@@ -2227,10 +2227,10 @@ const ASCIIGenerator = () => {
     const videoExportFolder = controlsFolder.addFolder('Video Export')
     videoExportFolder.add(videoExportSettings, 'duration', 1, 60).name('Duration (seconds)')
     videoExportFolder.add(videoExportSettings, 'fps', 1, 60).name('FPS')
-    videoExportFolder.add(exportVideoBtn, 'export').name('🎬 Export Video (MP4)')
-    videoExportFolder.add(exportFramesBtn, 'export').name('📸 Export Frames (Individual)')
-    videoExportFolder.add(exportFramesZipBtn, 'export').name('📦 Export Frames (ZIP)')
-    videoExportFolder.add(exportGifBtn, 'export').name('🎞️ Export GIF')
+    videoExportFolder.add(exportVideoBtn, 'export').name('Export Video (MP4)')
+    videoExportFolder.add(exportFramesBtn, 'export').name('Export Frames (Individual)')
+    videoExportFolder.add(exportFramesZipBtn, 'export').name('Export Frames (ZIP)')
+    videoExportFolder.add(exportGifBtn, 'export').name('Export GIF')
 
     
     const outputFolder = gui.addFolder('3. Output - ASCII')
@@ -2677,7 +2677,7 @@ const ASCIIGenerator = () => {
         }, 100)
       }
     }}
-    controlsFolder.add(resetToDefaultsBtn, 'reset').name('🔄 Reset to Defaults')
+    controlsFolder.add(resetToDefaultsBtn, 'reset').name('⟳ Reset to Defaults')
 
     
     let time = 0
